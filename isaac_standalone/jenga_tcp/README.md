@@ -1,98 +1,142 @@
-# Setting up Polyscope Using Docker
+# Jenga Communication Scripts
 
-This guide will walk you through the steps to set up Polyscope using Docker and integrate it with the Universal Robots ROS 2 driver.
-
----
-
-## Prerequisites
-
-1. **Docker Installed:** Ensure Docker is installed on your system. Refer to the [Docker Installation Guide](https://docs.docker.com/get-docker/) for your operating system.
-2. **ROS 2 Installed:** Install ROS 2 (recommended version: Humble or newer).
-3. **Universal Robots ROS 2 Driver:** Ensure you have installed the `universal_robot_ros2_driver` package. For installation instructions, see the [Universal Robots ROS 2 Driver Documentation](https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver).
+This README provides detailed instructions on how to use the Python scripts in this folder for simulating and controlling a Jenga block setup in Isaac Sim with ROS 2 communication.
 
 ---
 
-## Steps
+## Files Overview
 
-### 1. Pull the URSim Docker Image
+### 1. **send_jenga_coords.py**
+   - **Description:** This script sends commands (e.g., block coordinates, "play," or "reset") to the simulation.
+   - **Usage:**
+     - Send coordinates for Jenga block placement:
+       ```bash
+       ros2 run jenga_communication send_jenga_coords 1 1 0.015
+       ```
+     - Start the simulation and retrieve poses:
+       ```bash
+       ros2 run jenga_communication send_jenga_coords play
+       ```
+     - Reset the scene:
+       ```bash
+       ros2 run jenga_communication send_jenga_coords reset
+       ```
 
-Download the official URSim Docker image for the e-Series:
+### 2. **simulate_jenga_blocks.py**
+   - **Description:** The core simulation script that runs in Isaac Sim. It listens for commands sent by `send_jenga_coords.py` over a TCP connection, places blocks at specified coordinates, plays the simulation, and sends back block poses after a short delay. It also processes the "reset" command to clear the scene.
+   - **Usage:**
+     Run this script from the Isaac Sim Python environment:
+     ```bash
+     cd ~/.local/share/ov/pkg/isaac-sim-2023.1.1
+     ./python.sh $(pwd)/scripts/simulate_jenga_blocks.py
+     ```
 
-```bash
-docker pull universalrobots/ursim_e-series
-```
-
-### 2. Run the URSim Container
-
-Run the URSim container interactively:
-
-```bash
-docker run --rm -it universalrobots/ursim_e-series
-```
-
-This will start the URSim simulation environment and display the IP address of the simulator, which you will need for the next step. Example output:
-
-```
-Universal Robots simulator for e-Series:5.19.0
-
-IP address of the simulator
-
-     172.17.0.2
-
-Access the robots user interface through this URL:
-
-     http://172.17.0.2:6080/vnc.html?host=172.17.0.2&port=6080
-
-Access the robots user interface with a VNC application on this address:
-
-     172.17.0.2:5900
-```
-
-You can view and interact with the URSim Polyscope interface in your web browser by navigating to the provided URL:
-
-```
-http://172.17.0.2:6080/vnc.html?host=172.17.0.2&port=6080
-```
-
-### 3. Launch the Universal Robots ROS 2 Driver
-
-Launch the ROS 2 driver for the UR5e robot:
-
-```bash
-ros2 launch ur_bringup ur5e.launch.py ur_type:=ur5e robot_ip:=172.17.0.2
-```
-
-Replace `172.17.0.2` with the IP address displayed when running the URSim container.
+### 3. **receive_jenga_coords.py**
+   - **Description:** This script listens on a TCP port for block poses sent by the simulation when the "play" command is executed. It decodes the JSON data, prints the positions and rotations of all blocks, and ensures the poses are retrieved in the correct order.
+   - **Usage:**
+     Run this script in a separate terminal:
+     ```bash
+     ros2 run jenga_communication receive_jenga_coords
+     ```
 
 ---
 
 ## Example Workflow
 
-1. Pull and run the Docker image:
+1. **Start the Simulation:**
+   Open a terminal and run:
    ```bash
-   docker pull universalrobots/ursim_e-series
-   docker run --rm -it universalrobots/ursim_e-series
+   cd ~/.local/share/ov/pkg/isaac-sim-2023.1.1
+   ./python.sh $(pwd)/scripts/simulate_jenga_blocks.py
    ```
 
-   Note the IP address displayed in the output (e.g., `172.17.0.2`).
+2. **Send Commands:**
+   Open another terminal and run commands such as:
+   - Place Jenga blocks:
+     ```bash
+     ros2 run jenga_communication send_jenga_coords 1 1 0.015
+     ros2 run jenga_communication send_jenga_coords 1 1 0.045
+     ros2 run jenga_communication send_jenga_coords 0.9 1 0.075
+     ```
+   - Rotate a block before placement:
+     ```bash
+     ros2 run jenga_communication send_jenga_coords 1 1 0.105 45
+     ```
+   - Start the simulation:
+     ```bash
+     ros2 run jenga_communication send_jenga_coords play
+     ```
+   - Reset the scene:
+     ```bash
+     ros2 run jenga_communication send_jenga_coords reset
+     ```
 
-2. Launch the ROS 2 driver:
+3. **Retrieve Block Poses:**
+   Open a third terminal and run:
    ```bash
-   ros2 launch ur_bringup ur5e.launch.py ur_type:=ur5e robot_ip:=172.17.0.2
+   ros2 run jenga_communication receive_jenga_coords
    ```
+
+---
+
+## Commands Summary
+
+- **Start Simulation:**
+  ```bash
+  ./python.sh /path/to/simulate_jenga_blocks.py
+  ```
+
+- **Send Block Coordinates:**
+  ```bash
+  ros2 run jenga_communication send_jenga_coords x y z
+  ```
+
+- **Rotate Block and Place:**
+  ```bash
+  ros2 run jenga_communication send_jenga_coords x y z rotation_angle
+  ```
+
+- **Play Simulation:**
+  ```bash
+  ros2 run jenga_communication send_jenga_coords play
+  ```
+
+- **Reset Scene:**
+  ```bash
+  ros2 run jenga_communication send_jenga_coords reset
+  ```
+
+- **Retrieve Block Poses:**
+  ```bash
+  ros2 run jenga_communication receive_jenga_coords
+  ```
+
+---
+
+## Notes
+
+1. **ROS 2 Workspace Setup:** Ensure your ROS 2 workspace is properly sourced before running any ROS 2 commands:
+   ```bash
+   source $(pwd)/install/setup.bash
+   ```
+
+2. **Isaac Sim Version:** Ensure you are using Isaac Sim 2023.1.1 for compatibility.
+
+3. **TCP Communication:** Ensure that all scripts are running on the same network for proper TCP communication.
 
 ---
 
 ## Troubleshooting
 
-1. **Container Not Found:** Ensure the Docker container is running by using `docker ps`.
-2. **Connection Issues:** Verify that the container's IP address is correctly passed to the `robot_ip` parameter.
-3. **ROS 2 Driver Installation:** Ensure that the `ur_bringup` package is correctly installed in your ROS 2 workspace.
+- **Connection Issues:** Ensure all scripts are running and that the IP and port configurations match.
+- **Command Not Found:** Verify that your `jenga_communication` package is correctly built and installed in your ROS 2 workspace.
+- **Isaac Sim Errors:** Ensure Isaac Sim is running in the correct environment and the simulation script is properly executed.
 
 ---
 
 ## References
 
-- [URSim Docker Hub](https://hub.docker.com/r/universalrobots/ursim_e-series)
-- [Universal Robots ROS 2 Driver GitHub](https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver)
+- [Isaac Sim Documentation](https://developer.nvidia.com/isaac-sim)
+- [ROS 2 Documentation](https://docs.ros.org/)
+- [TCP Communication in Python](https://docs.python.org/3/library/socket.html)
 
