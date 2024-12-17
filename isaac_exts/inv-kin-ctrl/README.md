@@ -1,52 +1,79 @@
-# Extension Project Template
+# ROS2 Joint State Subscriber & Articulation Controller
 
-This project was automatically generated.
+## Overview
 
-- `app` - It is a folder link to the location of your *Omniverse Kit* based app.
-- `exts` - It is a folder where you can add new extensions. It was automatically added to extension search path. (Extension Manager -> Gear Icon -> Extension Search Path).
+This extension for **NVIDIA Isaac Sim** integrates ROS2 joint state subscription with robot articulation control. It uses OmniGraph to manage ROS2 data flow and robot movement, providing a seamless bridge between Isaac Sim and ROS2.
 
-Open this folder using Visual Studio Code. It will suggest you to install few extensions that will make python experience better.
+## Features
 
-Look for "InverseKinematicControl" extension in extension manager and enable it. Try applying changes to any python files, it will hot-reload and you can observe results immediately.
+- **Create UR5e Robot**: Adds the UR5e robot to the simulation environment.
+- **Import Action Graph**: Dynamically creates an OmniGraph for ROS2 communication and articulation control.
+- **Listen to ROS Topic**: Subscribes to a specified ROS2 joint state topic.
+- **Link Joints to Graph**: Connects ROS2 joint state outputs to the articulation controller.
+- **Play/Stop Simulation**: Starts or stops the simulation for real-time visualization.
 
-Alternatively, you can launch your app from console with this folder added to search path and your extension enabled, e.g.:
+---
 
-```
-> app\omni.code.bat --ext-folder exts --enable company.hello.world
-```
+## Prerequisites
 
-# App Link Setup
+- NVIDIA Isaac Sim 2023.1.1 or later
+- ROS2 installed and configured
+- UR5e robot USD asset available in Omniverse
+- Python dependencies for Isaac Sim and ROS2:
+  - `omni.graph.core`
+  - `omni.isaac.ros2_bridge`
+  - `omni.isaac.core_nodes`
+  - `omni.kit.uiapp`
 
-If `app` folder link doesn't exist or broken it can be created again. For better developer experience it is recommended to create a folder link named `app` to the *Omniverse Kit* app installed from *Omniverse Launcher*. Convenience script to use is included.
+---
 
-Run:
+## Installation
 
-```
-> link_app.bat
-```
+1. **Clone the Repository**:
+   ```bash
+   git clone https://github.com/<your-github-username>/vlm_isaac_sim.git
+   ```
 
-If successful you should see `app` folder link in the root of this repo.
+2. **Add the Extension Path**:
+   - Open **Isaac Sim**.
+   - Go to **Window > Settings > Extension Search Paths**.
+   - Add the following path to the search paths:
+     ```
+     <your-cloned-repo-location>/vlm_isaac_sim/isaac_exts/ros2-subscriber-controller/exts
+     ```
 
-If multiple Omniverse apps is installed script will select recommended one. Or you can explicitly pass an app:
+3. **Enable the Extension**:
+   - Open **Window > Extensions** in Isaac Sim.
+   - Search for **"ROS2 Joint State Subscriber & Articulation Controller"** and enable it.
 
-```
-> link_app.bat --app create
-```
+---
 
-You can also just pass a path to create link to:
+## Usage
 
-```
-> link_app.bat --path "C:/Users/bob/AppData/Local/ov/pkg/create-2021.3.4"
-```
+1. **Launch the Extension**:
+   - Once enabled, the extension window will appear with control buttons.
 
+2. **Steps to Use**:
+   - **Create UR5e**: Adds the UR5e robot to the `/World` stage.
+   - **Import Action Graph**: Creates the OmniGraph nodes for ROS2 communication.
+   - **Enter ROS Topic**: Input the ROS2 joint state topic name (e.g., `/joint_states`).
+   - **Listen to Topic**: Subscribes to the specified ROS2 topic.
+   - **Link Joints to Graph**: Connects ROS2 joint data to the articulation controller.
+   - **Play Simulation**: Starts the simulation to visualize the articulation control.
 
-# Sharing Your Extensions
+3. **Stop Simulation**:
+   - Use the **Stop Simulation** button to pause the environment.
 
-This folder is ready to be pushed to any git repository. Once pushed direct link to a git repository can be added to *Omniverse Kit* extension search paths.
+---
 
-Link might look like this: `git://github.com/[user]/[your_repo].git?branch=main&dir=exts`
+## Troubleshooting
 
-Notice `exts` is repo subfolder with extensions. More information can be found in "Git URL as Extension Search Paths" section of developers manual.
+- Ensure the ROS2 bridge is running and ROS2 is correctly configured.
+- Verify the ROS2 topic is publishing joint states (`/joint_states` by default).
+- Check the console logs for any connection errors.
 
-To add a link to your *Omniverse Kit* based app go into: Extension Manager -> Gear Icon -> Extension Search Path
+---
 
+## License
+
+This extension is provided under the NVIDIA Software License Agreement.
