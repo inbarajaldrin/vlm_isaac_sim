@@ -1,29 +1,28 @@
-# ROS2 Joint State Subscriber & Articulation Controller
+# Inverse Kinematic Control Extension
 
 ## Overview
 
-This extension for **NVIDIA Isaac Sim** integrates ROS2 joint state subscription with robot articulation control. It uses OmniGraph to manage ROS2 data flow and robot movement, providing a seamless bridge between Isaac Sim and ROS2.
+This extension for **NVIDIA Isaac Sim** provides tools to control the UR5e robot using **inverse kinematics (IK)** and direct joint commands. It integrates an **Lula IK Solver** to compute Cartesian targets for the robot and allows interactive joint control through a user-friendly UI.
 
 ## Features
 
-- **Create UR5e Robot**: Adds the UR5e robot to the simulation environment.
-- **Import Action Graph**: Dynamically creates an OmniGraph for ROS2 communication and articulation control.
-- **Listen to ROS Topic**: Subscribes to a specified ROS2 joint state topic.
-- **Link Joints to Graph**: Connects ROS2 joint state outputs to the articulation controller.
-- **Play/Stop Simulation**: Starts or stops the simulation for real-time visualization.
+- **Load UR5e Robot**: Adds the UR5e robot into the simulation environment.
+- **Lula IK Solver**: Provides inverse kinematic solutions for target Cartesian positions and orientations.
+- **Joint Control**: Allows direct input and manipulation of joint positions for the robot.
+- **Cartesian Control**: Enables users to set target positions (X, Y, Z) and orientations (Roll, Pitch, Yaw).
+- **Play/Stop Simulation**: Easily start or stop the simulation to visualize changes.
 
 ---
 
 ## Prerequisites
 
-- NVIDIA Isaac Sim 2023.1.1 or later
-- ROS2 installed and configured
-- UR5e robot USD asset available in Omniverse
-- Python dependencies for Isaac Sim and ROS2:
-  - `omni.graph.core`
-  - `omni.isaac.ros2_bridge`
-  - `omni.isaac.core_nodes`
+- **NVIDIA Isaac Sim** 2023.1.1 or later
+- **UR5e robot USD asset** (available in Omniverse).
+- Python dependencies for Isaac Sim:
+  - `omni.isaac.motion_generation`
+  - `omni.isaac.core`
   - `omni.kit.uiapp`
+  - `omni.isaac.dynamic_control`
 
 ---
 
@@ -37,40 +36,51 @@ This extension for **NVIDIA Isaac Sim** integrates ROS2 joint state subscription
 2. **Add the Extension Path**:
    - Open **Isaac Sim**.
    - Go to **Window > Settings > Extension Search Paths**.
-   - Add the following path to the search paths:
+   - Add the following path:
      ```
-     <your-cloned-repo-location>/vlm_isaac_sim/isaac_exts/ros2-subscriber-controller/exts
+     <your-cloned-repo-location>/vlm_isaac_sim/isaac_exts/inv-kin-ctrl/exts
      ```
 
 3. **Enable the Extension**:
-   - Open **Window > Extensions** in Isaac Sim.
-   - Search for **"ROS2 Joint State Subscriber & Articulation Controller"** and enable it.
+   - Open **Window > Extensions**.
+   - Search for **"Inverse Kinematic Control"** and enable it.
 
 ---
 
 ## Usage
 
 1. **Launch the Extension**:
-   - Once enabled, the extension window will appear with control buttons.
+   - Once enabled, the extension UI will appear with multiple collapsible frames.
 
 2. **Steps to Use**:
-   - **Create UR5e**: Adds the UR5e robot to the `/World` stage.
-   - **Import Action Graph**: Creates the OmniGraph nodes for ROS2 communication.
-   - **Enter ROS Topic**: Input the ROS2 joint state topic name (e.g., `/joint_states`).
-   - **Listen to Topic**: Subscribes to the specified ROS2 topic.
-   - **Link Joints to Graph**: Connects ROS2 joint data to the articulation controller.
-   - **Play Simulation**: Starts the simulation to visualize the articulation control.
+   - **Simulation Setup**:
+     - Click **"Load Scene"** to set up the environment.
+     - Use **"Load UR5e"** to load the UR5e robot into the simulation.
+     - Start or stop the simulation with the **Play** and **Stop** buttons.
 
-3. **Stop Simulation**:
-   - Use the **Stop Simulation** button to pause the environment.
+   - **Lula IK Solver**:
+     - Click **"Load Lula"** to initialize the Lula inverse kinematics solver.
+
+   - **Joint Control**:
+     - Enter joint values for the 6 UR5e joints in the respective input fields.
+     - Click **"Set Joint Values"** to apply the joint positions.
+     - Use **"Reset Joint Values"** to return all joint positions to zero.
+
+   - **Cartesian Control**:
+     - Input target Cartesian coordinates and orientation (X, Y, Z, Roll, Pitch, Yaw).
+     - Click **"Set Cartesian Values"** to move the UR5e robot to the specified pose.
+     - Use **"Reset Cartesian Values"** to restore default values.
+
+3. **Observe Changes**:
+   - Watch the UR5e robot respond in real-time as joint or Cartesian inputs are applied.
 
 ---
 
 ## Troubleshooting
 
-- Ensure the ROS2 bridge is running and ROS2 is correctly configured.
-- Verify the ROS2 topic is publishing joint states (`/joint_states` by default).
-- Check the console logs for any connection errors.
+- Ensure the Lula IK Solver is loaded before applying Cartesian values.
+- Verify that the UR5e robot USD asset is correctly located in Omniverse.
+- Check the terminal logs for any warnings about joint or articulation mismatches.
 
 ---
 
