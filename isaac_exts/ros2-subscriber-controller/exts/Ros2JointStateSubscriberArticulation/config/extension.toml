@@ -1,0 +1,26 @@
+[package]
+version = "1.0.0"
+authors = ["NVIDIA"]
+title = "ROS2 Joint State Subscriber & Articulation Controller"
+description = "An extension to create an OmniGraph for ROS2 joint state subscription and robot articulation control."
+readme  = "docs/README.md"
+repository = ""
+category = "Robotics"
+keywords = ["ROS2", "joint state", "articulation", "robotics"]
+changelog="docs/CHANGELOG.md"
+preview_image = "data/preview.png"
+icon = "data/icon.png"
+
+[dependencies]
+"omni.kit.uiapp" = {}
+"omni.isaac.ros2_bridge" = {}
+"omni.graph.core" = {}
+"omni.isaac.core_nodes" = {}
+
+[[python.module]]
+name = "Ros2JointStateSubscriberArticulation"
+
+[[test]]
+dependencies = [
+    "omni.kit.ui_test" 
+]
