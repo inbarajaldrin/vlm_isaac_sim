@@ -1,0 +1,3 @@
+string controller_to_use
+string object_class
+geometry_msgs/PoseStamped pose

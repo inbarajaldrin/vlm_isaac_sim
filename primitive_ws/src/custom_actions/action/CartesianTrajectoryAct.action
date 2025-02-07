@@ -1,0 +1,8 @@
+# Request (Goal)
+geometry_msgs/PoseStamped[] waypoints
+---
+# Result (Result)
+bool success
+---
+# Feedback
+geometry_msgs/PoseStamped current_pose

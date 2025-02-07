@@ -1,0 +1,4 @@
+set_param_node:
+  ros__parameters:
+    solver-error_scale: 0.1
+    solver-iterations: 20
