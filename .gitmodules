@@ -1,0 +1,7 @@
+[submodule "vision_ws/src/vision_opencv"]
+	path = vision_ws/src/vision_opencv
+	url = https://github.com/ros-perception/vision_opencv.git
+[submodule "vision_ws/src/realsense-ros"]
+	path = vision_ws/src/realsense-ros
+	url = https://github.com/IntelRealSense/realsense-ros.git
+	branch = ros2-master

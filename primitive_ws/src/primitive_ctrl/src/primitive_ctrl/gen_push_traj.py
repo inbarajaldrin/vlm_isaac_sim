@@ -4,6 +4,7 @@ import sys
 import casadi as ca
 import numpy as np
 from pytransform3d.rotations import quaternion_from_euler
+import math
 
 
 def gen_push_cartesian_trajectory(
@@ -149,7 +150,7 @@ def gen_push_cartesian_trajectory(
         # Create position and orientation using Vector3 and Quaternion
         position = Point(x=x_k, y=y_k, z=z0)
         # This gives quaternion in WXYZ format. 
-        quaternion_val = quaternion_from_euler(e=[-180, 0, theta_k],  # Vector of Euler rots
+        quaternion_val = quaternion_from_euler(e=[-math.pi, 0, theta_k],  # Vector of Euler rots
                                                i=0, j=1, k=2,   # Order of rotations
                                                extrinsic=True)
         orientation = Quaternion(x=quaternion_val[1], y=quaternion_val[2], 

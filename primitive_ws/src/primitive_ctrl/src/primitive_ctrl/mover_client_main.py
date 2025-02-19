@@ -25,7 +25,7 @@ def colorize(color_code, message):
 
 class MoverClientMain(Node):
     def __init__(self):
-        super().__init__('push_controller_action_client')
+        super().__init__('multiple_controller_action_client')
         # Create the Action Client to send the trajectory commands to the Action Server
         self.client = ActionClient(self,
                                    CartesianTrajectoryAct, 
@@ -46,7 +46,7 @@ class MoverClientMain(Node):
                                                     )
 
     def current_pose_callback(self, current_msg):
-        self.get_logger().info(colorize(35, f"Current Pose: {current_msg.controller_to_use}," +
+        self.get_logger().info(colorize(35, f"Controller to use: {current_msg.controller_to_use}," +
                                             f"Pose: {current_msg.pose}"))
 
     def goal_callback(self, goal_msg):
@@ -60,7 +60,7 @@ class MoverClientMain(Node):
             waypoints = gen_push_cartesian_trajectory(
                                                         xb = 0.2,
                                                         yb = 0.2,
-                                                        zb = 0.295,
+                                                        zb = 0.1,
                                                         thetab = 1.57,
                                                         xf = goal_msg.pose.x,
                                                         yf = goal_msg.pose.y,

@@ -7,40 +7,40 @@
   <maintainer email="abhara13@asu.edu">abhara13</maintainer>
   <license>Apache License 2.0</license>
 
-
-  <depend>ur_apt_dependency</depend>
+  <depend>ur-apt-dependency</depend>
   <!-- This refers to the 'ros-humble-ur' ROS2 APT metapackage mentioned 
   in rosdep.yaml. The instructions for the metapackage are given here: 
   https://docs.universal-robots.com/Universal_Robots_ROS2_Documentation/doc/ur_robot_driver/ur_robot_driver/doc/installation/installation.html
   The repo link is here: 
   https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver/tree/humble
   -->
-  <depend>ros2_control_dependencies</depend>
+  <depend>ros2-control-dependencies</depend>
   <!--  This refers to the 'ros-humble-ros2-control' and the 'ros-humble-ros2-controllers'
   ROS2 APT metapackages mentioned in rosdep.yaml. The instructions are given here:
   https://control.ros.org/humble/doc/getting_started/getting_started.html
   -->
-  <depend>casadi_pip_dependency</depend>
+  <depend>casadi-pip-dependency</depend>
   <!-- This refers to the 'casadi' Python PIP package mentioned in rosdep.yaml.
   The instructions for this package: https://web.casadi.org/python-api/
   -->
-  <depend>numpy_pip_dependency</depend>
+  <depend>numpy-pip-dependency</depend>
   <!-- This refers to the 'numpy' Python PIP package mentioned in rosdep.yaml.
   -->
-  <depend>pytransform3d_pip_dependency</depend>
+  <depend>pytransform3d-pip-dependency</depend>
   <!-- This refers to the 'pytransform3d' Python PIP package mentioned in rosdep.yaml.
   The instructions for this package: https://dfki-ric.github.io/pytransform3d/install.html
   -->
-  <depend>cartesian_controllers_dep</depend>
-  <!-- This refers to the 'cartesian_controllers' ROS2 GIT metapackage,
-  mentioned in rosdep.yaml. The link to this repo is here:
-  https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers/
-  -->
-  <depend>ur_cartesian_ctrl_dep</depend>
-  <!--  This refers to the 'cartesian_controllers_universal_robots' ROS2 GIT pkg,
-  mentioned in rosdep.yaml. This is an example package for the method to configure 
-  a robot for the 'cartesian_controllers' pkg.
-  -->
+
+
+  <export>
+    <rosdep>ur-apt-dependency</rosdep>
+    <rosdep>ros2-control-dependencies</rosdep>
+    <rosdep>casadi-pip-dependency</rosdep>
+    <rosdep>numpy-pip-dependency</rosdep>
+    <rosdep>pytransform3d-pip-dependency</rosdep>
+
+    <build_type>ament_python</build_type>
+  </export>
 
 
   <exec_depend>ros2launch</exec_depend>
@@ -50,7 +50,4 @@
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
-  <export>
-    <build_type>ament_python</build_type>
-  </export>
 </package>

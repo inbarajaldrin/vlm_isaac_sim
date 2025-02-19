@@ -13,7 +13,8 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from geometry_msgs.msg import PoseStamped, Point, Quaternion
 
 import time
-
+import math 
+from pytransform3d.rotations import quaternion_from_euler
 
 # This function edits the "Text Color" or "Background Color" of terminal text using ANSI codes
 def colorize(color_code, message):
@@ -30,10 +31,20 @@ class Move3DPublisher(Node):
         timer_period = 0.1
         self.i = 0
         self.target = 50
+        # OFFSETS
+        x_offset = 0.790 + 0.02
+        y_offset = 0.822 - 0.02
         # Goal Pose
-        self.goal_pose = {"position": Point(x=0.281, y=0.081, z=0.57939),
+        angle = 80
+        quat = quaternion_from_euler([math.pi, 0, angle*math.pi/180], 0,1,2, extrinsic=True)
+        self.goal_pose = {"position": Point(x=0.2, #0.293-x_offset, 
+                                            y=0.5, #-0.285+y_offset, 
+                                            z=0.135),   #Point(x=0.281, y=0.081, z=0.57939),
                           #Point(x=1.0345, y=0.2608, z=0.2224),
-                          "orientation": Quaternion(x=1.0, y=0.0, z=0.0, w=0.0)
+                          "orientation": Quaternion(x=quat[1], y=quat[2], 
+                                                    z=quat[3], w=quat[0])
+                          #Quaternion(x=-0.707, y=0.707, z=0.0, w=0.0)
+                          #Quaternion(x=-0.9238, y=0.38268, z=0.0, w=0.0)
                           #Quaternion(x=-0.0297, y=0.6974, z=0.7138, w=0.05556)
                          } 
         # Create Timed Callback to publish topic

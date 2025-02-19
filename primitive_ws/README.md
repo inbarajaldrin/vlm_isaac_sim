@@ -5,7 +5,14 @@
 #### Installing Pre-requisites (for this package)
 Starting at the root directory of the ROS2 WS,
 ```
-echo "yaml file://$(pwd)/src/primitive_ctrl/rosdep.yaml" > ~/.ros/rosdep/sources.list.d/primitive_ctrl.list
+cd src
+git clone -b ros2 https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers.git
+git clone -b ros2 https://github.com/stefanscherzinger/cartesian_controllers_universal_robots.git
+cd ..
+```
+Followed by
+```
+echo "yaml file://$(pwd)/src/primitive_ctrl/rosdep.yaml"  |  sudo tee /etc/ros/rosdep/sources.list.d/primitive-ctrl.list
 rosdep update
 rosdep install --from-paths src/primitive_ctrl --ignore-src -r -y
 ```
@@ -41,7 +48,16 @@ ros2 run primitive_ctrl mover_client_main
 
 
 #### Dependency Details
-The dependency packages being installed by this command are:
+The dependency packages being installed are:
+
+**cartesian_controllers** GIT ROS2 metapackage.
+The link to the repository is: https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers/
+
+**cartesian_controllers_universal_robots** GIT ROS2 example package.
+The link to the repository is: https://github.com/stefanscherzinger/cartesian_controllers_universal_robots/
+This package is used for its URDF and controller_manager.yaml descriptions.
+
+Followed by,
 
 **ros-humble-ur** Ubuntu (APT) ROS2 metapackage. 
 The instructions for the metapackage is given here: https://docs.universal-robots.com/Universal_Robots_ROS2_Documentation/doc/ur_robot_driver/ur_robot_driver/doc/installation/installation.html
@@ -54,13 +70,6 @@ The instructions are given here: https://control.ros.org/humble/doc/getting_star
 The docs for casadi are here: https://web.casadi.org/python-api/
 
 **numpy** and **pytransform3d** Python (pip) packages. 
-
-**cartesian_controllers** GIT ROS2 metapackage.
-The link to the repository is: https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers/
-
-**cartesian_controllers_universal_robots** GIT ROS2 example package.
-The link to the repository is: https://github.com/stefanscherzinger/cartesian_controllers_universal_robots/
-This package is used for its URDF and controller_manager.yaml descriptions.
 
 *See package.xml; -> rosdep.yaml file contains references to the pkgs to be installed.*
 *Also, see setup.py which contains pip packages, which manages dependencies when package is distributed as a Python package.*

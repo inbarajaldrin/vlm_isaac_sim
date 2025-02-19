@@ -28,6 +28,21 @@ from pathlib import Path
 PACKAGE_NAME = "primitive_ctrl"
 
 
+def event_based_notifier(target_action, ready_message):
+    ready_notifier = RegisterEventHandler(
+                        event_handler=OnProcessExit(
+                                        target_action=target_action,
+                                        on_exit=[LogInfo(
+                                                msg=colorize(
+                                                103,
+                                                f"\t\t\t\t\t\t\t{ready_message}!!!!!!\n"
+                                                )
+                                                )
+                                                ]
+                                    )
+                     )
+    return ready_notifier
+
 
 # This function edits the "Text Color" or "Background Color" of terminal text using ANSI codes
 def colorize(color_code, message):
@@ -42,12 +57,12 @@ def generate_launch_description():
     logger = logging.get_logger("launch_file_logger")
     logger.info(colorize(46, "\n\n\t\t\t\t\t\t\tStarting the Launch file...\n\n     \
         This node does the following: 1. Start the UR Robot Node & DEFAULT Controllers \n  \
-                                        \t\t\t\t<<VIRTUAL MODE BY DEFAULT>>   \
-                \t\t\t\t2. Stop the <scaled_joint_trajectory_controller>\n  \
-                \t\t\t\t3. Setup Cartesian Ctrl <cartesian_motion_controllers>\n  \
-                \t\t\t\t4. Modify Params of <cartesian_motion_controller>: solver.error_scale \
-                \n\n        \
-                        "))
+                        \t\t\t\t<<VIRTUAL MODE BY DEFAULT>>\n   \
+            \t\t\t\t2. Stop the <scaled_joint_trajectory_controller>\n  \
+            \t\t\t\t3. Setup Cartesian Ctrl <cartesian_motion_controllers>\n  \
+            \t\t\t\t4. Modify Params of <cartesian_motion_controller>: solver.error_scale \
+            \n\n        \
+                "))
     
     # Launch argument for starting Robot in "Simulated" or "Real" Mode (default is simulated)
     use_fake_hardware_arg = DeclareLaunchArgument('use_fake_hardware_param', 
@@ -56,8 +71,8 @@ def generate_launch_description():
                                             'Simulated Mode <"true"> ' +
                                             'or Real Mode <"false>'
                                 )
-    robot_ip_arg = DeclareLaunchArgument('robot_ip', 
-                                    default_value='192.168.1.10',
+    robot_ip_arg = DeclareLaunchArgument('robot_ip_param', 
+                                    default_value='192.168.1.66',
                                 )
 
     # Get ROS2 Package paths
@@ -84,10 +99,12 @@ def generate_launch_description():
                             launch_arguments={"ur_type": "ur5e",
                             "use_fake_hardware": LaunchConfiguration('use_fake_hardware_param'),  #"true",
                             "launch_rviz": "true",
-                            "robot_ip": LaunchConfiguration('robot_ip'),  #"192.168.10.1",
+                            "robot_ip": LaunchConfiguration('robot_ip_param'),  #"192.168.10.1",
                             "controllers_file": cartes_controllers}.items(),
                       )
-    
+    '''ur_ctrl_starter_notifier = event_based_notifier(
+                                        ur_ctrl_include, 
+                                        "<ur_control.launch.py> Started")'''
     # ----- STOP THE scaled_joint_trajectory_controller which conflicts with cartesian ctrl
     stop_ctrl_proc = ExecuteProcess(cmd=[
                                             "ros2", "control", 
@@ -98,23 +115,26 @@ def generate_launch_description():
                                     output="screen"
                                    )
     delayed_stop_ctrl_action = TimerAction(
-                                    period=5.0,
+                                    period=9.0,
                                     actions=[stop_ctrl_proc],
-                               )
-
+                               )                              
+    '''scaled_joint_trajectory_notifier = event_based_notifier(
+                                            stop_ctrl_proc, 
+                                            "<scaled_joint_trajectory_ctrl> Stopped.")
+    '''
 
     # ---------- SETUP ACTIVE AND INACTIVE CONTROLLERS
     # Convenience function for easy spawner construction
     # CMDLINE EQUIVALENT: ros2 run controller_manager spawner cartesian_motion_controller  \
     #                          -t cartesian_motion_controller/CartesianMotionController    \
-    #                          --inactive  -p /home/abhara13/Documents/akshay_work/NN_Implementations/vlm_isaac_sim/primitive_ws/src/primitive_ctrl/config/controller_mgr_start.yaml
+    #                          --inactive  -p /home/dimelab/Desktop/vlm_isaac_sim/primitive_ws/src/primitive_ctrl/config/controller_mgr_start.yaml
     def controller_spawner(name, *args):
         ctrl_node = Node(
                         package="controller_manager",
                         executable="spawner",
                         #name="controller_manager",
                         output="screen",
-                        #parameters=[cartes_controllers],
+                        parameters=[cartes_controllers],
                         arguments=[name]  +
                                   [a for a in args]  +
                                   ["--controller-manager", "/controller_manager"]  +
@@ -127,6 +147,7 @@ def generate_launch_description():
         "cartesian_motion_controller"
     ]
     active_spawners = [controller_spawner(controller) for controller in active_list]
+    
     # Inactive controllers
     inactive_list = [
         "cartesian_compliance_controller",
@@ -140,10 +161,13 @@ def generate_launch_description():
 
     # Start all Active and Inactive Spawners - Delayed by 10s
     delayed_spawners = TimerAction(
-                            period=9.0,  # Wait 10 seconds after ur_ctrl_include starts
+                            period=12.0,  # Wait 10 seconds after ur_ctrl_include starts
                             actions=active_spawners + inactive_spawners,
                        )
-
+    '''spawner_notifier = event_based_notifier(
+                            active_spawners[-1], 
+                            "<cartesian_controllers> Started.")
+    '''
 
     # ---------- MODIFY THE PARAMETERS OF THE cartesian_motion_controller SOLVER 
     # --- Control the P-D Gains of the controller together using "solver.error_scale" parameter
@@ -159,12 +183,10 @@ def generate_launch_description():
                                                 "/src/primitive_ctrl/config/solver_safe_params.yaml"]                     
                              )
     delayed_modify_node = TimerAction(
-                            period=12.0,  # Wait 10 seconds after ur_ctrl_include starts
+                            period=15.0,  # Wait 10 seconds after ur_ctrl_include starts
                             actions=[modify_error_scale_node],
                           )
-
-    #logger.info(colorize(42, "\n\nREADY TO USE!!!!!! \n\n"))
-    ready_notifier = RegisterEventHandler(
+    final_ready_notifier = RegisterEventHandler(
                         event_handler=OnProcessExit(
                                         target_action=modify_error_scale_node,
                                         on_exit=[LogInfo(
@@ -177,14 +199,17 @@ def generate_launch_description():
                                       )
                      )
 
+
     return LaunchDescription([  
-                                robot_ip_arg,
-                                use_fake_hardware_arg,
+                                robot_ip_arg,   # Input args: True/False
+                                use_fake_hardware_arg,  # Input arg: IP Address
+                                
                                 ur_ctrl_include,        # Start UR control
                                 delayed_stop_ctrl_action, # Stop scaled_joint_trajectory_controller after 6 sec
                                 delayed_spawners,       # Spawn controllers after 10 sec
                                 delayed_modify_node,     # Run node to modify the Solver params
-                                ready_notifier
+                                
+                                final_ready_notifier
                             ])
 
     '''return LaunchDescription(

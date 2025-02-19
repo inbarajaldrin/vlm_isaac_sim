@@ -1,39 +1,27 @@
-ur_apt_dependency:
+ur-apt-dependency:
   ubuntu:
     apt:
       packages:
         - ros-humble-ur
 
-ros2_control_dependencies:
+ros2-control-dependencies:
   ubuntu:
     apt:
       packages:
         - ros-humble-ros2-control
         - ros-humble-ros2-controllers
 
-casadi_pip_dependency:
-  pip:
-    packages:
-      - casadi
+casadi-pip-dependency:
+  ubuntu:
+    pip:
+      packages: [casadi]
 
-numpy_pip_dependency:
-  pip:
-    packages:
-      - numpy
+numpy-pip-dependency:
+  ubuntu:
+    pip:
+      packages: [numpy]
 
-pytransform3d_pip_dependency:
-  pip:
-    packages:
-      - pytransform3d
-
-cartesian_controllers_dep:
-  source:
-    install_script: |
-      git clone -b ros2 https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers.git src/cartesian_controllers
-      colcon build
-
-ur_cartesian_ctrl_dep:
-  source:
-    install_script: |
-      git clone -b ros2  https://github.com/stefanscherzinger/cartesian_controllers_universal_robots.git src/cartesian_controllers_universal_robots
-      colcon build
+pytransform3d-pip-dependency:
+  ubuntu:
+    pip:
+      packages: [pytransform3d]

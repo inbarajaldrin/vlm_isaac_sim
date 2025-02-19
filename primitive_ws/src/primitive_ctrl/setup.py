@@ -29,7 +29,8 @@ setup(
                 'move3d_test = primitive_ctrl.move3d_test:main',
                 'move3d_action_server = primitive_ctrl.move3d_action_server:main',
                 'move3d_action_client_test = primitive_ctrl.move3d_action_client_test:main',
-                'mover_client_main = primitive_ctrl.mover_client_main:main'
+                'mover_client_main = primitive_ctrl.mover_client_main:main',
+                'mover_client_push = primitive_ctrl.mover_client_push:main',
         ],
     },
 

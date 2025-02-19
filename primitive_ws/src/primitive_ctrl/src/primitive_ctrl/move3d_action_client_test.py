@@ -45,14 +45,34 @@ def main(args=None):
     rclpy.init(args=args)
     node = CartesianControlClient()
     
-    goal_poses = [{"position": Point(x=0.281+(0.005 * k), y=0.081, z=0.57939-(0.005 * k)),
+    '''goal_poses = [{"position": Point(x=0.281+(0.005 * k), y=0.081, z=0.57939-(0.005 * k)),
                  #Point(x=1.0345, y=0.2608, z=0.2224),
                  "orientation": Quaternion(x=1.0, y=0.0, z=0.0, w=0.0)
                  #Quaternion(x=-0.0297, y=0.6974, z=0.7138, w=0.05556)
                  }
                  
                     for k in range(0,100)
-                 ] 
+                 ]'''
+    goal_poses = [{"position": Point(x=0.2, y=0.5, z=0.2),
+                 #Point(x=1.0345, y=0.2608, z=0.2224),
+                 "orientation": Quaternion(x=-0.9848, y=0.17365, z=0.0, w=0.0)
+                 #Quaternion(x=-0.0297, y=0.6974, z=0.7138, w=0.05556)
+                 },
+                 {"position": Point(x=0.0, y=0.7, z=0.2),
+                 #Point(x=1.0345, y=0.2608, z=0.2224),
+                 "orientation": Quaternion(x=-0.9848, y=0.17365, z=0.0, w=0.0)
+                 #Quaternion(x=-0.0297, y=0.6974, z=0.7138, w=0.05556)
+                 },
+                 {"position": Point(x=-0.2, y=0.5, z=0.2),
+                 #Point(x=1.0345, y=0.2608, z=0.2224),
+                 "orientation": Quaternion(x=-0.9848, y=0.17365, z=0.0, w=0.0)
+                 #Quaternion(x=-0.0297, y=0.6974, z=0.7138, w=0.05556)
+                 },
+                 {"position": Point(x=0.0, y=0.3, z=0.2),
+                 #Point(x=1.0345, y=0.2608, z=0.2224),
+                 "orientation": Quaternion(x=-0.9848, y=0.17365, z=0.0, w=0.0)
+                 #Quaternion(x=-0.0297, y=0.6974, z=0.7138, w=0.05556)
+                 }] 
 
     # Create a list of sample waypoints
     waypoints = []
