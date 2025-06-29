@@ -68,22 +68,13 @@ Replace `172.17.0.2` with the IP address displayed when running the URSim contai
 
 ---
 
-## Example Workflow
+### 4. Run the Isaac Sim ROS 2 Integration Script
 
-1. Pull and run the Docker image:
-   ```bash
-   docker pull universalrobots/ursim_e-series
-   docker run --rm -it universalrobots/ursim_e-series
-   ```
+Launch Isaac Sim and open the Script Editor window.
 
-   Note the IP address displayed in the output (e.g., `172.17.0.2`).
+Open and run the following script `URsim/ur5e_action_graph.py`
 
-2. Launch the ROS 2 driver:
-   ```bash
-   ros2 launch ur_bringup ur5e.launch.py ur_type:=ur5e robot_ip:=172.17.0.2
-   ```
-
----
+Once the simulation is running, the robot inside Isaac Sim will replicate the motions of the real robot simulated in URSim.
 
 ## Troubleshooting
 
@@ -97,5 +88,3 @@ Replace `172.17.0.2` with the IP address displayed when running the URSim contai
 
 - [URSim Docker Hub](https://hub.docker.com/r/universalrobots/ursim_e-series)
 - [Universal Robots ROS 2 Driver GitHub](https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver)
-
- 
