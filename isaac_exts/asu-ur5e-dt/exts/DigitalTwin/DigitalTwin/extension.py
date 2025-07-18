@@ -1,0 +1,418 @@
+import omni.ext
+import omni.ui as ui
+import asyncio
+import numpy as np
+import os
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
+import threading
+from omni.isaac.core.world import World
+from omni.isaac.core.utils.stage import add_reference_to_stage
+from omni.isaac.core.articulations import ArticulationView
+from omni.isaac.nucleus import get_assets_root_path
+from omni.isaac.motion_generation import LulaKinematicsSolver, ArticulationKinematicsSolver
+from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
+from omni.isaac.core.articulations import Articulation
+import omni.graph.core as og
+import omni.usd
+
+class DigitalTwin(omni.ext.IExt):
+    def on_startup(self, ext_id):
+        print("[DigitalTwin] inv kin ctrl startup")
+
+        self._timeline = omni.timeline.get_timeline_interface()
+        self._ur5e_view = None
+        self._articulation = None
+        self._gripper_view = None
+
+        # Initialize ROS2 only once
+        try:
+            if not rclpy.ok():
+                rclpy.init()
+                print("ROS2 initialized successfully")
+        except Exception as e:
+            print(f"Failed to initialize ROS2: {e}")
+
+        # Create the window UI
+        self._window = ui.Window("UR5e Digital Twin", width=300, height=600)
+        with self._window.frame:
+            with ui.VStack(spacing=5):
+                self.create_ui()
+
+    def create_ui(self):
+        with ui.VStack(spacing=5):
+            with ui.CollapsableFrame(title="Setup", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Simulation Setup", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
+                        ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
+                        ui.Button("Setup Action Graph", width=180, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
+
+            with ui.CollapsableFrame(title="RG2 Gripper", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("RG2 Gripper Control", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Import RG2 Gripper", width=150, height=35, clicked_fn=self.import_rg2_gripper)
+                        ui.Button("Attach Gripper to UR5e", width=180, height=35, clicked_fn=self.attach_rg2_to_ur5e)
+                    
+                    with ui.HStack(spacing=5):
+                        ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.setup_gripper_action_graph)
+
+    async def load_scene(self):
+        world = World()
+        await world.initialize_simulation_context_async()
+        world.scene.add_default_ground_plane()
+        print("Scene loaded successfully.")
+
+    async def load_ur5e(self):
+        asset_path = "omniverse://localhost/Library/ur5e.usd"
+        add_reference_to_stage(usd_path=asset_path, prim_path="/World/UR5e")
+
+        self._ur5e_view = ArticulationView(prim_paths_expr="/World/UR5e", name="ur5e_view")
+        World.instance().scene.add(self._ur5e_view)
+        await World.instance().reset_async()
+        self._timeline.stop()
+
+        self._articulation = Articulation("/World/UR5e")
+
+        print("UR5e robot loaded successfully!")
+        
+    async def setup_action_graph(self):
+        import omni.graph.core as og
+        import omni.isaac.core.utils.stage as stage_utils
+        from omni.isaac.core.utils.extensions import enable_extension
+
+        print("Setting up ROS 2 Action Graph...")
+
+        # Ensure extensions are enabled
+        enable_extension("omni.isaac.ros2_bridge")
+        enable_extension("omni.isaac.core_nodes")
+        enable_extension("omni.graph.action")
+
+        graph_path = "/ActionGraph"
+        (graph, nodes, _, _) = og.Controller.edit(
+            {
+                "graph_path": graph_path,
+                "evaluator_name": "execution"
+            },
+            {
+                og.Controller.Keys.CREATE_NODES: [
+                    ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                    ("ros2_context", "omni.isaac.ros2_bridge.ROS2Context"),
+                    ("isaac_read_simulation_time", "omni.isaac.core_nodes.IsaacReadSimulationTime"),
+                    ("ros2_subscribe_joint_state", "omni.isaac.ros2_bridge.ROS2SubscribeJointState"),
+                    ("ros2_publish_clock", "omni.isaac.ros2_bridge.ROS2PublishClock"),
+                    ("articulation_controller", "omni.isaac.core_nodes.IsaacArticulationController"),
+                ],
+                og.Controller.Keys.SET_VALUES: [
+                    ("ros2_context.inputs:useDomainIDEnvVar", True),
+                    ("ros2_context.inputs:domain_id", 0),
+                    ("ros2_subscribe_joint_state.inputs:topicName", "/joint_states"),
+                    ("ros2_subscribe_joint_state.inputs:nodeNamespace", ""),
+                    ("ros2_subscribe_joint_state.inputs:queueSize", 10),
+                    ("ros2_publish_clock.inputs:topicName", "/clock"),
+                    ("ros2_publish_clock.inputs:nodeNamespace", ""),
+                    ("ros2_publish_clock.inputs:qosProfile", "SYSTEM_DEFAULT"),
+                    ("ros2_publish_clock.inputs:queueSize", 10),
+                    ("isaac_read_simulation_time.inputs:resetOnStop", True),
+                    ("articulation_controller.inputs:robotPath", "/World/UR5e"),
+                ],
+                og.Controller.Keys.CONNECT: [
+                    ("on_playback_tick.outputs:tick", "ros2_subscribe_joint_state.inputs:execIn"),
+                    ("on_playback_tick.outputs:tick", "ros2_publish_clock.inputs:execIn"),
+                    ("on_playback_tick.outputs:tick", "articulation_controller.inputs:execIn"),
+                    ("ros2_context.outputs:context", "ros2_subscribe_joint_state.inputs:context"),
+                    ("ros2_context.outputs:context", "ros2_publish_clock.inputs:context"),
+                    ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_clock.inputs:timeStamp"),
+                    ("ros2_subscribe_joint_state.outputs:positionCommand", "articulation_controller.inputs:positionCommand"),
+                    ("ros2_subscribe_joint_state.outputs:velocityCommand", "articulation_controller.inputs:velocityCommand"),
+                    ("ros2_subscribe_joint_state.outputs:effortCommand", "articulation_controller.inputs:effortCommand"),
+                    ("ros2_subscribe_joint_state.outputs:jointNames", "articulation_controller.inputs:jointNames"),
+                ],
+            }
+        )
+
+        print("ROS 2 Action Graph setup complete.")
+
+    def setup_gripper_action_graph(self):
+        """Setup gripper action graph for ROS2 control"""
+        print("Setting up Gripper Action Graph...")
+        
+        graph_path = "/World/ActionGraph"
+        
+        # Delete existing
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            stage.RemovePrim(graph_path)
+        
+        keys = og.Controller.Keys
+        
+        print("Creating nodes...")
+        # Create only the essential nodes
+        (graph, nodes, _, _) = og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
+                    (f"{graph_path}/context", "omni.isaac.ros2_bridge.ROS2Context"),
+                    (f"{graph_path}/subscriber", "omni.isaac.ros2_bridge.ROS2Subscriber"),
+                    (f"{graph_path}/script", "omni.graph.scriptnode.ScriptNode")
+                ]
+            }
+        )
+        
+        print("Adding script attributes...")
+        # Add script attributes
+        script_node = og.Controller.node(f"{graph_path}/script")
+        og.Controller.create_attribute(script_node, "inputs:String", og.Type(og.BaseDataType.TOKEN))
+        og.Controller.create_attribute(script_node, "outputs:Integer", og.Type(og.BaseDataType.INT))
+        
+        print("Setting values...")
+        # Set values with try/catch for each one
+        def safe_set(path, value, desc=""):
+            try:
+                attr = og.Controller.attribute(path)
+                if attr.is_valid():
+                    og.Controller.set(attr, value)
+                    print(f"Set {desc}")
+                    return True
+                else:
+                    print(f"Invalid: {desc}")
+                    return False
+            except Exception as e:
+                print(f"Failed {desc}: {e}")
+                return False
+        
+        # Configure ROS2 Subscriber
+        safe_set(f"{graph_path}/subscriber.inputs:messageName", "String", "ROS2 message type")
+        safe_set(f"{graph_path}/subscriber.inputs:messagePackage", "std_msgs", "ROS2 package")
+        safe_set(f"{graph_path}/subscriber.inputs:topicName", "gripper_command", "ROS2 topic")
+        
+        # Configure Script Node
+        safe_set(f"{graph_path}/script.inputs:usePath", False, "Use inline script")
+        
+        # Script that handles string processing internally
+        script_content = '''from omni.isaac.core.articulations import ArticulationView
+from omni.isaac.core.utils.types import ArticulationActions
+import numpy as np
+import omni.timeline
+
+gripper_view = None
+last_sim_frame = -1
+
+def setup(db):
+    global gripper_view
+    try:
+        # Always create a fresh gripper view in setup
+        gripper_view = ArticulationView(prim_paths_expr="/RG2_Gripper", name="gripper")
+        gripper_view.initialize()
+        db.log_info("Gripper initialized successfully")
+    except Exception as e:
+        db.log_error(f"Gripper setup failed: {e}")
+        gripper_view = None
+
+def compute(db):
+    global gripper_view, last_sim_frame
+    
+    try:
+        # Get input string from ROS2
+        input_str = str(db.inputs.String).strip()
+        
+        # Handle string replacements in Python
+        if input_str == "open":
+            processed_str = "1100"
+        elif input_str == "close":
+            processed_str = "0"
+        else:
+            processed_str = input_str
+        
+        # Convert to width in mm
+        try:
+            width_mm = float(processed_str) / 10.0
+        except ValueError:
+            db.log_error(f"Invalid input: {input_str}")
+            return
+        
+        # Check if simulation restarted by monitoring frame count
+        timeline = omni.timeline.get_timeline_interface()
+        current_frame = timeline.get_current_time() * timeline.get_time_codes_per_seconds()
+        
+        # If frame went backwards, simulation was restarted
+        if current_frame < last_sim_frame or last_sim_frame == -1:
+            db.log_info("Simulation restart detected, reinitializing gripper...")
+            try:
+                gripper_view = ArticulationView(prim_paths_expr="/RG2_Gripper", name="gripper")
+                gripper_view.initialize()
+                db.log_info("Gripper reinitialized after restart")
+            except Exception as e:
+                db.log_error(f"Gripper reinitialization failed: {e}")
+                gripper_view = None
+        
+        last_sim_frame = current_frame
+        
+        # Check if gripper is available
+        if gripper_view is None:
+            db.log_warning("Gripper not available")
+            return
+        
+        # Check if simulation is running
+        if timeline.is_stopped():
+            return
+        
+        # Try to apply action, with graceful handling of physics not ready
+        try:
+            # Clamp to valid range
+            width_mm = np.clip(width_mm, 0.0, 110.0)
+            
+            # Map width to joint angle: 0mm = -π/4 (closed), 110mm = π/6 (open)
+            ratio = width_mm / 110.0
+            joint_angle = -np.pi/4 + ratio * (np.pi/4 + np.pi/6)
+            
+            # Apply to gripper
+            target_positions = np.array([joint_angle, joint_angle])
+            action = ArticulationActions(
+                joint_positions=target_positions,
+                joint_indices=np.array([0, 1])
+            )
+            gripper_view.apply_action(action)
+            
+            # Set output
+            db.outputs.Integer = int(width_mm)
+            
+            db.log_info(f"Gripper: \\'{input_str}\\' -> {width_mm:.1f}mm -> {joint_angle:.3f}rad")
+            
+        except Exception as e:
+            # This is expected during the first few frames after restart
+            if "Physics Simulation View is not created yet" in str(e):
+                # Physics not ready yet, just wait
+                db.outputs.Integer = int(np.clip(width_mm, 0.0, 110.0))
+            else:
+                db.log_warning(f"Action failed: {e}")
+                db.outputs.Integer = 0
+        
+    except Exception as e:
+        db.log_error(f"Compute error: {e}")
+        db.outputs.Integer = 0
+
+def cleanup(db):
+    global gripper_view
+    db.log_info("Cleaning up gripper")
+    gripper_view = None'''
+        
+        safe_set(f"{graph_path}/script.inputs:script", script_content, "Python script")
+        
+        print("Creating connections...")
+        # Simple connections - direct from ROS2 to script
+        connections = [
+            (f"{graph_path}/tick.outputs:tick", f"{graph_path}/subscriber.inputs:execIn", "Tick to subscriber"),
+            (f"{graph_path}/context.outputs:context", f"{graph_path}/subscriber.inputs:context", "Context to subscriber"),
+            (f"{graph_path}/subscriber.outputs:data", f"{graph_path}/script.inputs:String", "ROS2 data to script"),
+            (f"{graph_path}/subscriber.outputs:execOut", f"{graph_path}/script.inputs:execIn", "ROS2 exec to script")
+        ]
+        
+        success_count = 0
+        for src, dst, desc in connections:
+            try:
+                og.Controller.edit(graph, {keys.CONNECT: [(src, dst)]})
+                print(f"Connected {desc}")
+                success_count += 1
+            except Exception as e:
+                print(f"Failed {desc}: {e}")
+        
+        print(f"Graph created with {success_count}/4 connections!")
+        print("Location: /World/ActionGraph")
+        print("Test commands:")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"open\"'")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
+        print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
+
+    def import_rg2_gripper(self):
+        from omni.isaac.core.utils.stage import add_reference_to_stage
+        rg2_usd_path = "omniverse://localhost/Library/RG2.usd"
+        add_reference_to_stage(rg2_usd_path, "/RG2_Gripper")
+        print("RG2 Gripper imported at /RG2_Gripper")
+
+    def attach_rg2_to_ur5e(self):
+        import omni.usd
+        from pxr import Usd, Sdf, UsdGeom, Gf
+        import math
+
+        stage = omni.usd.get_context().get_stage()
+        ur5e_gripper_path = "/World/UR5e/Gripper"
+        rg2_path = "/RG2_Gripper"
+        joint_path = "/World/UR5e/joints/robot_gripper_joint"
+        rg2_base_link = "/RG2_Gripper/onrobot_rg2_base_link"
+
+        ur5e_prim = stage.GetPrimAtPath(ur5e_gripper_path)
+        rg2_prim = stage.GetPrimAtPath(rg2_path)
+        joint_prim = stage.GetPrimAtPath(joint_path)
+
+        if not ur5e_prim or not rg2_prim:
+            print("Error: UR5e or RG2 gripper prim not found.")
+            return
+
+        # Copy transforms from UR5e gripper to RG2
+        translate_attr = ur5e_prim.GetAttribute("xformOp:translate")
+        orient_attr = ur5e_prim.GetAttribute("xformOp:orient")
+
+        if translate_attr.IsValid() and orient_attr.IsValid():
+            rg2_prim.CreateAttribute("xformOp:translate", Sdf.ValueTypeNames.Double3).Set(translate_attr.Get())
+            rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd).Set(orient_attr.Get())
+
+        # Set orientation for RG2 Gripper
+        print("Setting RG2 gripper orientation...")
+        if rg2_prim.IsValid():
+            quat_attr = rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd, custom=True)
+            quat_attr.Set(Gf.Quatd(0.70711, Gf.Vec3d(-0.70711, 0.0, 0.0)))
+            print(" Set xformOp:orient for RG2 gripper.")
+        else:
+            print(f" Gripper not found at {rg2_path}")
+
+        # Create or update the physics joint
+        if not joint_prim:
+            joint_prim = stage.DefinePrim(joint_path, "PhysicsFixedJoint")
+
+        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_base_link)])
+        joint_prim.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
+        joint_prim.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
+
+        # Set localRot0 and localRot1 for joint
+        print("Setting joint rotation parameters...")
+        if joint_prim.IsValid():
+            def euler_to_quatf(x_deg, y_deg, z_deg):
+                """Convert Euler angles (XYZ order, degrees) to Gf.Quatf"""
+                rx = Gf.Quatf(math.cos(math.radians(x_deg) / 2), Gf.Vec3f(1, 0, 0) * math.sin(math.radians(x_deg) / 2))
+                ry = Gf.Quatf(math.cos(math.radians(y_deg) / 2), Gf.Vec3f(0, 1, 0) * math.sin(math.radians(y_deg) / 2))
+                rz = Gf.Quatf(math.cos(math.radians(z_deg) / 2), Gf.Vec3f(0, 0, 1) * math.sin(math.radians(z_deg) / 2))
+                return rx * ry * rz  # Apply in XYZ order
+
+            # Set the rotation quaternions for proper joint alignment
+            quat0 = euler_to_quatf(-90, 0, -90)
+            quat1 = euler_to_quatf(-180, 90, 0)
+            
+            joint_prim.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat0)
+            joint_prim.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat1)
+            print(" Set physics:localRot0 and localRot1 for robot_gripper_joint.")
+        else:
+            print(f" Joint not found at {joint_path}")
+
+        print("RG2 successfully attached to UR5e with proper orientation and joint configuration.")
+
+    def on_shutdown(self):
+        """Clean shutdown"""
+        print("[DigitalTwin] Digital Twin shutdown")
+        
+        # Shutdown ROS2
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception as e:
+            print(f"ROS2 shutdown error: {e}")
+        
+        # Destroy window
+        if self._window:
+            self._window.destroy()
+            self._window = None
