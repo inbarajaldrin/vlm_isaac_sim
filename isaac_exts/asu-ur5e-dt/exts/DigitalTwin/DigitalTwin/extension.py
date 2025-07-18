@@ -35,7 +35,7 @@ class DigitalTwin(omni.ext.IExt):
             print(f"Failed to initialize ROS2: {e}")
 
         # Create the window UI
-        self._window = ui.Window("UR5e Digital Twin", width=300, height=700)  # Increased height for new section
+        self._window = ui.Window("UR5e Digital Twin", width=300, height=800)  # Increased height
         with self._window.frame:
             with ui.VStack(spacing=5):
                 self.create_ui()
@@ -60,7 +60,7 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.HStack(spacing=5):
                         ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.setup_gripper_action_graph)
 
-            # NEW SECTION: Intel RealSense Camera
+            # Intel RealSense Camera
             with ui.CollapsableFrame(title="Intel RealSense Camera", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
                     ui.Label("Intel RealSense D455 Camera", alignment=ui.Alignment.LEFT)
@@ -70,6 +70,27 @@ class DigitalTwin(omni.ext.IExt):
                     
                     with ui.HStack(spacing=5):
                         ui.Button("Setup Camera Action Graph", width=200, height=35, clicked_fn=self.setup_camera_action_graph)
+
+            # NEW SECTION: Additional Camera
+            with ui.CollapsableFrame(title="Additional Camera", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Camera Configuration", alignment=ui.Alignment.LEFT)
+                    
+                    # Camera type selection with checkboxes and labels
+                    with ui.VStack(spacing=5):
+                        with ui.HStack(spacing=5):
+                            self._isometric_checkbox = ui.CheckBox(width=20)
+                            self._isometric_checkbox.model.set_value(True)  # Default checked
+                            ui.Label("Isometric View", alignment=ui.Alignment.LEFT, width=120)
+                        
+                        with ui.HStack(spacing=5):
+                            self._topdown_checkbox = ui.CheckBox(width=20)
+                            ui.Label("Top Down View", alignment=ui.Alignment.LEFT, width=120)
+                    
+                    # Camera control buttons
+                    with ui.HStack(spacing=5):
+                        ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
+                        ui.Button("Create Action Graph", width=180, height=35, clicked_fn=self.create_additional_camera_actiongraph)
 
     async def load_scene(self):
         world = World()
@@ -412,7 +433,6 @@ def cleanup(db):
 
         print("RG2 successfully attached to UR5e with proper orientation and joint configuration.")
 
-    # NEW METHODS: Intel RealSense Camera functions
     def import_realsense_camera(self):
         """Import Intel RealSense D455 camera"""
         usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/4.5/Isaac/Sensors/Intel/RealSense/rsd455.usd"
@@ -524,6 +544,152 @@ def cleanup(db):
         
         print("\nCamera ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
+
+    # NEW METHODS: Additional Camera functions
+    def create_additional_camera(self):
+        """Create additional camera based on selected view type"""
+        import omni.isaac.core.utils.numpy.rotations as rot_utils
+        from omni.isaac.sensor import Camera
+        import omni.usd
+        from pxr import Gf
+        import numpy as np
+        
+        # Check which camera type is selected
+        is_isometric = self._isometric_checkbox.model.get_value_as_bool()
+        is_topdown = self._topdown_checkbox.model.get_value_as_bool()
+        
+        if is_isometric:
+            # Create isometric camera
+            camera = Camera(
+                prim_path="/World/isometric_camera",
+                position=np.array([0, 0, 0]),  # We'll set position via USD
+                frequency=30,
+                resolution=(640, 480),
+            )
+            camera.initialize()
+            
+            # Set exact transform values via USD attributes
+            stage = omni.usd.get_context().get_stage()
+            camera_prim = stage.GetPrimAtPath("/World/isometric_camera")
+            
+            # Set exact position and orientation
+            camera_prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(2.3, 3.2, 1.3))
+            camera_prim.GetAttribute("xformOp:orient").Set(Gf.Quatd(0.25624, 0.19434, 0.57219, 0.75443))
+            print("Isometric camera created at /World/isometric_camera")
+        
+        if is_topdown:
+            # Create top-down camera using improved method
+            camera = Camera(
+                prim_path="/World/topdown_camera",
+                position=np.array([0, 0, 5]),  # Above origin at height 5
+                frequency=30,
+                resolution=(640, 480),
+                orientation=rot_utils.euler_angles_to_quats(
+                    np.array([0, 90, 0]), degrees=True
+                ),
+            )
+            camera.initialize()
+            camera.add_motion_vectors_to_frame()
+            print("Top-down camera created at /World/topdown_camera")
+
+    def create_additional_camera_actiongraph(self):
+        """Create ActionGraph for additional camera ROS2 publishing"""
+        # Check which cameras exist and create action graphs accordingly
+        is_isometric = self._isometric_checkbox.model.get_value_as_bool()
+        is_topdown = self._topdown_checkbox.model.get_value_as_bool()
+        
+        if is_isometric:
+            self._create_camera_actiongraph(
+                "/World/isometric_camera", 
+                640, 480, 
+                "isometric_camera_rgb", 
+                "IsometricCamera"
+            )
+        
+        if is_topdown:
+            self._create_camera_actiongraph(
+                "/World/topdown_camera", 
+                640, 480, 
+                "topdown_camera_rgb", 
+                "TopDownCamera"
+            )
+
+    def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
+        """Helper method to create camera ActionGraph"""
+        graph_path = f"/World/ActionGraph_{graph_suffix}"
+        print(f"Creating ActionGraph: {graph_path}")
+        print(f"Camera: {camera_prim}")
+        print(f"Resolution: {width}x{height}")
+        print(f"ROS2 Topic: {topic}")
+        
+        # Create ActionGraph
+        try:
+            og.Controller.create_graph(graph_path)
+            print(f"Created ActionGraph at {graph_path}")
+        except Exception:
+            print(f"ActionGraph already exists at {graph_path}")
+        
+        # Create nodes
+        nodes = [
+            ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+            ("isaac_run_one_simulation_frame", "omni.isaac.core_nodes.OgnIsaacRunOneSimulationFrame"),
+            ("isaac_create_render_product", "omni.isaac.core_nodes.IsaacCreateRenderProduct"),
+            ("ros2_context", "omni.isaac.ros2_bridge.ROS2Context"),
+            ("ros2_camera_helper", "omni.isaac.ros2_bridge.ROS2CameraHelper"),
+        ]
+        
+        print("\nCreating nodes...")
+        for node_name, node_type in nodes:
+            try:
+                node_path = f"{graph_path}/{node_name}"
+                og.Controller.create_node(node_path, node_type)
+                print(f"Created {node_name}")
+            except Exception as e:
+                print(f"Node {node_name} already exists")
+        
+        # Set node attributes
+        print("\nConfiguring nodes...")
+        
+        # Configure render product
+        try:
+            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:cameraPrim").set([camera_prim])
+            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:width").set(width)
+            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:height").set(height)
+            og.Controller.attribute(f"{graph_path}/isaac_create_render_product.inputs:enabled").set(True)
+            print(f"Configured render product: {camera_prim} @ {width}x{height}")
+        except Exception as e:
+            print(f"Error configuring render product: {e}")
+        
+        # Configure ROS2 camera helper
+        try:
+            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:topicName").set(topic)
+            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:frameId").set("camera_link")
+            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:type").set("rgb")
+            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:enabled").set(True)
+            og.Controller.attribute(f"{graph_path}/ros2_camera_helper.inputs:queueSize").set(10)
+            print(f"Configured ROS2 helper: topic={topic}")
+        except Exception as e:
+            print(f"Error configuring ROS2 helper: {e}")
+        
+        # Create connections
+        print("\nConnecting nodes...")
+        connections = [
+            ("on_playback_tick.outputs:tick", "isaac_run_one_simulation_frame.inputs:execIn"),
+            ("isaac_run_one_simulation_frame.outputs:step", "isaac_create_render_product.inputs:execIn"),
+            ("isaac_create_render_product.outputs:execOut", "ros2_camera_helper.inputs:execIn"),
+            ("isaac_create_render_product.outputs:renderProductPath", "ros2_camera_helper.inputs:renderProductPath"),
+            ("ros2_context.outputs:context", "ros2_camera_helper.inputs:context"),
+        ]
+        
+        for source, target in connections:
+            try:
+                og.Controller.connect(f"{graph_path}/{source}", f"{graph_path}/{target}")
+                print(f"Connected {source.split('.')[0]} -> {target.split('.')[0]}")
+            except Exception as e:
+                print(f"Failed to connect {source} -> {target}: {e}")
+        
+        print(f"\n{graph_suffix} ActionGraph created successfully!")
+        print(f"Test with: ros2 topic echo /{topic}")
 
     def on_shutdown(self):
         """Clean shutdown"""
