@@ -10,7 +10,12 @@ from contextlib import AsyncExitStack
 
 # Fix NumPy compatibility issue
 import os
+import sys
 os.environ['NUMPY_ARRAY_API'] = '1'
+
+# Add paths for agent imports
+sys.path.append("/home/aaugus11/Documents/isaac-sim-mcp/agent")
+sys.path.append("/home/aaugus11/Documents/isaac-sim-mcp/isaac_mcp")
 
 # ROS2 imports with better error handling
 ROS2_AVAILABLE = False
@@ -56,7 +61,7 @@ class MCPClient:
                 print("Anthropic API key not found. MCP client will use basic responses.")
                 self.anthropic = None
 
-    async def connect_to_server(self, server_script_path: str = "/home/ubuntu/Documents/isaac-sim-mcp/isaac_mcp/server.py"):
+    async def connect_to_server(self, server_script_path: str = "/home/aaugus11/Documents/isaac-sim-mcp/isaac_mcp/server.py"):
         """Connect to Isaac Sim MCP server"""
         if not MCP_AVAILABLE:
             return False
@@ -195,11 +200,37 @@ else:
 # --- Agent Functions ---
 mcp_client = MCPClient()
 
-def agent_random(message, history):
-    return random.choice(["Yes", "No", "Maybe", "Processing...", "Command received"])
-
 def agent_chatgpt(message, history):
-    return "ChatGPT says: " + message[::-1]
+    """ChatGPT agent using OpenAI API"""
+    try:
+        import openai
+        client = openai.OpenAI()  # Uses OPENAI_API_KEY from environment
+        
+        # Build conversation history
+        messages = [
+            {"role": "system", "content": "You are an AI assistant helping with Isaac Sim robotics simulation. You can help with robot control commands, scene setup, and general robotics questions."}
+        ]
+        
+        for msg in history[-10:]:  # Keep last 10 messages for context
+            if isinstance(msg, dict) and msg.get("role") in ["user", "assistant"]:
+                messages.append({"role": msg["role"], "content": msg.get("content", "")})
+        
+        # Add current message
+        messages.append({"role": "user", "content": message})
+        
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=messages,
+            max_tokens=2000,
+            temperature=0.7
+        )
+        
+        return response.choices[0].message.content
+        
+    except ImportError:
+        return "ChatGPT agent not available. Please install the OpenAI library: pip install openai"
+    except Exception as e:
+        return f"ChatGPT agent error: {e}. Make sure OPENAI_API_KEY is set in your environment."
 
 async def agent_isaac_sim_mcp(message, history):
     """Isaac Sim MCP Agent using real MCP connection"""
@@ -292,7 +323,7 @@ def route_agent(message, history, agent_name):
         return agent_random(message, history)
     elif agent_name == "ChatGPT":
         return agent_chatgpt(message, history)
-    elif agent_name == "Isaac Sim MCP":
+    elif agent_name == "Claude":
         if MCP_AVAILABLE:
             # Run async function in event loop
             try:
@@ -355,18 +386,18 @@ def create_interface():
         
         with gr.Row():
             # LEFT side - Agent Control
-            with gr.Column(scale=3):
+            with gr.Column(scale=1):
                 gr.Markdown("## AI Agent Control")
                 agent_selector = gr.Dropdown(
                     label="Select AI Agent",
-                    choices=["Random", "ChatGPT", "Isaac Sim MCP"],
-                    value="Isaac Sim MCP",
+                    choices=["Claude", "ChatGPT"],
+                    value="Claude",
                     interactive=True
                 )
                 
                 # Fixed chatbot with proper type parameter
                 chatbox = gr.Chatbot(
-                    height=300, 
+                    height=400, 
                     label="Agent Communication",
                     type="messages"
                 )
@@ -380,60 +411,83 @@ def create_interface():
                 with gr.Row():
                     send_btn = gr.Button("Send", variant="primary")
                     clear_btn = gr.Button("Clear Chat")
-                
-                # Primitive Commands Section
-                gr.Markdown("## Primitive Commands")
-                with gr.Tabs():
-                    with gr.Tab("Setup Scene"):
-                        gr.Textbox(value="", lines=4, interactive=False, show_label=False, placeholder="Leave blank as requested")
-                    
-                    with gr.Tab("Pick & Place"):
-                        pick_place_textbox = gr.Textbox(
-                            value=pick_place_prompt, 
-                            lines=10, 
-                            interactive=False, 
-                            show_label=False
-                        )
-                    
-                    with gr.Tab("Stack"):
-                        gr.Textbox(value="", lines=4, interactive=False, show_label=False, placeholder="Leave blank as requested")
-                    
-                    with gr.Tab("Push Primitive"):
-                        gr.Textbox(value="", lines=4, interactive=False, show_label=False, placeholder="Leave blank as requested")
 
-            # RIGHT side - Camera Feeds
-            with gr.Column(scale=2):
+            # RIGHT side - Camera Feeds and Primitives
+            with gr.Column(scale=1):
                 gr.Markdown("## Camera Feeds")
                 
-                exocentric_image = gr.Image(
-                    label="Exocentric View (/exocentric_camera)", 
-                    height=200,
-                    type="numpy"
-                )
-                
+                # Four camera views in tabs
                 with gr.Tabs():
+                    with gr.Tab("Exocentric"):
+                        exocentric_image = gr.Image(
+                            label="Exocentric View (/exocentric_camera)", 
+                            height=250,
+                            type="numpy"
+                        )
+                    
                     with gr.Tab("Intel RGB"):
                         intel_rgb_image = gr.Image(
                             label="Intel RGB View (/intel_camera_rgb)", 
-                            height=200,
+                            height=250,
                             type="numpy"
                         )
                     
                     with gr.Tab("Depth Map"):
                         depth_image = gr.Image(
                             label="Depth Map (/intel_camera_depth)", 
-                            height=200,
+                            height=250,
+                            type="numpy"
+                        )
+                    
+                    with gr.Tab("Custom"):
+                        custom_image = gr.Image(
+                            label="Custom View (/custom_camera)", 
+                            height=250,
                             type="numpy"
                         )
                 
-                custom_image = gr.Image(
-                    label="Custom View (/custom_camera)", 
-                    height=200,
-                    type="numpy"
-                )
-                
                 # Camera refresh button
                 refresh_btn = gr.Button("Refresh Cameras", variant="secondary")
+                
+                # Primitive Commands Section - Below cameras
+                gr.Markdown("## Primitive Commands")
+                with gr.Tabs():
+                    with gr.Tab("Setup Scene"):
+                        setup_textbox = gr.Textbox(
+                            value=setup_scene_prompt,
+                            lines=3, 
+                            interactive=True, 
+                            show_label=False,
+                            placeholder="Setup scene command..."
+                        )
+                        setup_copy_btn = gr.Button("Copy Setup Command", size="sm")
+                    
+                    with gr.Tab("Pick & Place"):
+                        pick_place_textbox = gr.Textbox(
+                            value=pick_place_prompt, 
+                            lines=8, 
+                            interactive=True, 
+                            show_label=False
+                        )
+                        pick_copy_btn = gr.Button("Copy Pick & Place Command", size="sm")
+                    
+                    with gr.Tab("Stack"):
+                        stack_textbox = gr.Textbox(
+                            value=stack_prompt, 
+                            lines=3, 
+                            interactive=True, 
+                            show_label=False
+                        )
+                        stack_copy_btn = gr.Button("Copy Stack Command", size="sm")
+                    
+                    with gr.Tab("Push Primitive"):
+                        push_textbox = gr.Textbox(
+                            value=push_prompt, 
+                            lines=3, 
+                            interactive=True, 
+                            show_label=False
+                        )
+                        push_copy_btn = gr.Button("Copy Push Command", size="sm")
 
         # Event handlers - Fixed for new Gradio format
         def send_message(message, history, agent_name):
@@ -451,6 +505,10 @@ def create_interface():
         def clear_chat():
             return []
 
+        def copy_to_message(command_text):
+            return command_text
+
+        # Chat event handlers
         send_btn.click(
             fn=send_message,
             inputs=[msg, chatbox, agent_selector],
@@ -468,9 +526,35 @@ def create_interface():
             outputs=chatbox
         )
         
+        # Camera refresh handler
         refresh_btn.click(
             fn=update_camera_feeds,
             outputs=[exocentric_image, intel_rgb_image, depth_image, custom_image]
+        )
+
+        # Copy button handlers
+        setup_copy_btn.click(
+            fn=copy_to_message,
+            inputs=[setup_textbox],
+            outputs=[msg]
+        )
+        
+        pick_copy_btn.click(
+            fn=copy_to_message,
+            inputs=[pick_place_textbox],
+            outputs=[msg]
+        )
+        
+        stack_copy_btn.click(
+            fn=copy_to_message,
+            inputs=[stack_textbox],
+            outputs=[msg]
+        )
+        
+        push_copy_btn.click(
+            fn=copy_to_message,
+            inputs=[push_textbox],
+            outputs=[msg]
         )
 
         # Initial load of camera feeds
@@ -494,7 +578,8 @@ if __name__ == "__main__":
         demo = create_interface()
         print("Starting Gradio interface...")
         print("Available camera topics will be automatically detected")
-        print("MCP Agent:", "Available" if MCP_AVAILABLE else "Using fallback")
+        print("Claude Agent:", "Available" if MCP_AVAILABLE else "Using fallback")
+        print("ChatGPT Agent: Install 'openai' library and set OPENAI_API_KEY to enable")
         print("ROS2:", "Available" if ROS2_AVAILABLE else "Using placeholders")
         
         demo.launch(
