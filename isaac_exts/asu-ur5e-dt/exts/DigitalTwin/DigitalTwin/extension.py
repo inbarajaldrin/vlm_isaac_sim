@@ -79,14 +79,14 @@ class DigitalTwin(omni.ext.IExt):
                     # Camera type selection with checkboxes and labels
                     with ui.VStack(spacing=5):
                         with ui.HStack(spacing=5):
-                            self._isometric_checkbox = ui.CheckBox(width=20)
-                            self._isometric_checkbox.model.set_value(True)  # Default checked
-                            ui.Label("Isometric View", alignment=ui.Alignment.LEFT, width=120)
-                        
+                            self._exocentric_checkbox = ui.CheckBox(width=20)
+                            self._exocentric_checkbox.model.set_value(True)  # Default checked
+                            ui.Label("Exocentric View", alignment=ui.Alignment.LEFT, width=120)
+
                         with ui.HStack(spacing=5):
-                            self._topdown_checkbox = ui.CheckBox(width=20)
-                            ui.Label("Top Down View", alignment=ui.Alignment.LEFT, width=120)
-                    
+                            self._custom_checkbox = ui.CheckBox(width=20)
+                            ui.Label("Close Up View", alignment=ui.Alignment.LEFT, width=120)
+
                     # Camera control buttons
                     with ui.HStack(spacing=5):
                         ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
@@ -545,73 +545,81 @@ def cleanup(db):
         print("\nCamera ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{ROS2_TOPIC}")
 
-    # NEW METHODS: Additional Camera functions
     def create_additional_camera(self):
         """Create additional camera based on selected view type"""
         import omni.isaac.core.utils.numpy.rotations as rot_utils
         from omni.isaac.sensor import Camera
         import omni.usd
-        from pxr import Gf
+        from pxr import Gf, UsdGeom
         import numpy as np
-        
+
+        def set_camera_pose(prim_path: str, position_xyz, quat_xyzw):
+            """Apply translation and quaternion orientation (x, y, z, w) to a camera prim."""
+            stage = omni.usd.get_context().get_stage()
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim.IsValid():
+                raise RuntimeError(f"Camera prim '{prim_path}' not found.")
+            xform = UsdGeom.Xform(prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(*position_xyz))
+            quat = Gf.Quatd(quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2])
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+
         # Check which camera type is selected
-        is_isometric = self._isometric_checkbox.model.get_value_as_bool()
-        is_topdown = self._topdown_checkbox.model.get_value_as_bool()
-        
-        if is_isometric:
-            # Create isometric camera
+        is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
+        is_custom = self._custom_checkbox.model.get_value_as_bool()
+
+        if is_exocentric:
+            prim_path = "/World/exocentric_camera"
+            position = (2.3, 3.2, 1.3)
+            quat_xyzw = (0.19434, 0.57219, 0.75443, 0.25624)  # x, y, z, w
+
             camera = Camera(
-                prim_path="/World/isometric_camera",
-                position=np.array([0, 0, 0]),  # We'll set position via USD
+                prim_path=prim_path,
+                position=np.array(position),  # Temporary, actual pose set below
                 frequency=30,
                 resolution=(640, 480),
             )
             camera.initialize()
-            
-            # Set exact transform values via USD attributes
-            stage = omni.usd.get_context().get_stage()
-            camera_prim = stage.GetPrimAtPath("/World/isometric_camera")
-            
-            # Set exact position and orientation
-            camera_prim.GetAttribute("xformOp:translate").Set(Gf.Vec3d(2.3, 3.2, 1.3))
-            camera_prim.GetAttribute("xformOp:orient").Set(Gf.Quatd(0.25624, 0.19434, 0.57219, 0.75443))
-            print("Isometric camera created at /World/isometric_camera")
-        
-        if is_topdown:
-            # Create top-down camera using improved method
+            set_camera_pose(prim_path, position, quat_xyzw)
+            print("Exocentric camera created at /World/exocentric_camera")
+
+        if is_custom:
+            prim_path = "/World/custom_camera"
+            position = (0.0, 4.0, 0.5)
+            quat_xyzw = (0.0, 0.67559, 0.73728, 0.0)  # x, y, z, w
+
             camera = Camera(
-                prim_path="/World/topdown_camera",
-                position=np.array([0, 0, 5]),  # Above origin at height 5
+                prim_path=prim_path,
+                position=np.array(position),  # Temp pose
                 frequency=30,
                 resolution=(640, 480),
-                orientation=rot_utils.euler_angles_to_quats(
-                    np.array([0, 90, 0]), degrees=True
-                ),
             )
             camera.initialize()
             camera.add_motion_vectors_to_frame()
-            print("Top-down camera created at /World/topdown_camera")
+            set_camera_pose(prim_path, position, quat_xyzw)
+            print("Custom camera created at /World/custom_camera")
 
     def create_additional_camera_actiongraph(self):
         """Create ActionGraph for additional camera ROS2 publishing"""
         # Check which cameras exist and create action graphs accordingly
-        is_isometric = self._isometric_checkbox.model.get_value_as_bool()
-        is_topdown = self._topdown_checkbox.model.get_value_as_bool()
-        
-        if is_isometric:
+        is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
+        is_custom = self._custom_checkbox.model.get_value_as_bool()
+
+        if is_exocentric:
             self._create_camera_actiongraph(
-                "/World/isometric_camera", 
+                "/World/exocentric_camera", 
                 640, 480, 
-                "isometric_camera_rgb", 
-                "IsometricCamera"
+                "exocentric_camera", 
+                "ExocentricCamera"
             )
         
-        if is_topdown:
+        if is_custom:
             self._create_camera_actiongraph(
-                "/World/topdown_camera", 
+                "/World/custom_camera", 
                 640, 480, 
-                "topdown_camera_rgb", 
-                "TopDownCamera"
+                "custom_camera", 
+                "CustomCamera"
             )
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
