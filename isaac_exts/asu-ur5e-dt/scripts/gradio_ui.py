@@ -252,23 +252,64 @@ def init_ros2():
         return False
 
 # --- Predefined Prompts ---
-setup_scene_prompt = """Set up a table with 3 objects: a red cube, a blue cylinder, and a green sphere placed randomly."""
+setup_scene_prompt = """
+list available topics and read jenga pose.
+set pz values =0 and place the blocks in the scene in isaac sim
+while following this convention
+isaac sim px = -1x px of jenga
+same for y axis 
 
-pick_place_prompt = """**Pick and place prompt**
+jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
+
+Rotation- follow [w, x, y, z] order.
+
+"""
+reset_scene_prompt="""
+list available topics and read jenga pose.
+list prims in isaac sim and find if the jenga blocks are already imported. if they are then just update the pose of the jenga block using the following logic.
+if the jenga block doesnt exist in topics and it exists in isaac sim prim list then delete that prim.
+If there are more jenga blocks in topics and some are missing in the scene, then add new jenga block in the right orientation.
+set pz values =0 and place the blocks in the scene in isaac sim
+while following this convention
+isaac sim px = -1x px of jenga
+same for y axis 
+
+jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
+
+Rotation- follow [w, x, y, z] order.
+
+"""
+pick_place_prompt = """
+Pick and place prompt
+
+Step0: pick one jenga block out of avaible jenga blocks (not the one already moved to new position)
+
 Step1: read jenga block pose : x,y,z , rx,ry,rz
-Step2: move UR ee to : -x,-y,z=0.3 with 0,180,0
+
+Step2: move UR ee to : -x,-y,z=0.2 with 0,180,0
+
 Step3: move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1
-Step4: move UR ee to : -x,-y,z=0.24 with 0,180,(UR rz)
-Step5: Close gripper and confirm grasp visually (access exocentric camera view)
-Step6: move UR ee to : -x,-y,z=0.3 
+
+Step4: move UR ee to : -x,-y,z=0.15 with 0,180,(UR rz)
+
+Step5: Close gripper 
+
+Step6: move UR ee to : -x,-y,z=0.2 # and confirm grasp visually (access exocentric camera view)
+
 Step7: set ee orientation with 0,180,(desired final rotation)- no changes if nothing specified
 required_rotation = desired_final_rotation - current_jenga_rz new_ee_rz = current_ee_rz + required_rotation
 
-Step8: move UR ee to : final pose x,y,0.3 to drop (Final pose - remember x,y,z in isaac sim is -x,-y ee in UR frame. So if i want to place it at 0.3,0.5 then use -0.3,-0.5 to perform ik calculation.)
-Step9: move the ee z to  0.24
+Step8: move UR ee to : final pose x,y,0.2 to drop (Final pose - remember x,y,z in isaac sim is -x,-y ee in UR frame. So if i want to place it at 0.3,0.5 then use -0.3,-0.5 to perform ik calculation.)
+
+Step9: move the ee z to  0.15
+
 Step10: open gripper
-Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0] Target Isaac Sim position: [0.0, 0.5] with jenga block position rz 30 
-Target Isaac Sim position: [0, 0.5] with no rotation to jenga block when placing"""
+
+Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0] 
+
+Target Isaac Sim position: [0.3, 0.5] with jenga block position rz 0
+
+repeat till no jenga blocks remain in their initial pose. """
 
 stack_prompt = """Stack the red cube on top of the blue cylinder."""
 
@@ -309,30 +350,30 @@ def create_interface():
         
         with gr.Row():
             # LEFT side - Agent Control
-            with gr.Column(scale=1):
-                gr.Markdown("## AI Agent Control")
-                agent_selector = gr.Dropdown(
-                    label="Select AI Agent",
-                    choices=agent_choices,
-                    value=agent_choices[0],
-                    interactive=True
-                )
+            # with gr.Column(scale=1):
+            #     gr.Markdown("## AI Agent Control")
+            #     agent_selector = gr.Dropdown(
+            #         label="Select AI Agent",
+            #         choices=agent_choices,
+            #         value=agent_choices[0],
+            #         interactive=True
+            #     )
                 
-                chatbox = gr.Chatbot(
-                    height=400, 
-                    label="Agent Communication",
-                    type="messages"
-                )
+            #     chatbox = gr.Chatbot(
+            #         height=400, 
+            #         label="Agent Communication",
+            #         type="messages"
+            #     )
                 
-                msg = gr.Textbox(
-                    placeholder="Enter your command for the robot...", 
-                    label="Your Message",
-                    lines=2
-                )
+            #     msg = gr.Textbox(
+            #         placeholder="Enter your command for the robot...", 
+            #         label="Your Message",
+            #         lines=2
+            #     )
                 
-                with gr.Row():
-                    send_btn = gr.Button("Send", variant="primary")
-                    clear_btn = gr.Button("Clear Chat")
+            #     with gr.Row():
+            #         send_btn = gr.Button("Send", variant="primary")
+            #         clear_btn = gr.Button("Clear Chat")
 
             # RIGHT side - Camera Feeds and Primitives
             with gr.Column(scale=1):
@@ -435,22 +476,22 @@ def create_interface():
             return command_text
 
         # Chat event handlers
-        send_btn.click(
-            fn=send_message,
-            inputs=[msg, chatbox, agent_selector],
-            outputs=[chatbox, msg]
-        )
+        # send_btn.click(
+        #     fn=send_message,
+        #     inputs=[msg, chatbox, agent_selector],
+        #     outputs=[chatbox, msg]
+        # )
         
-        msg.submit(
-            fn=send_message,
-            inputs=[msg, chatbox, agent_selector], 
-            outputs=[chatbox, msg]
-        )
+        # msg.submit(
+        #     fn=send_message,
+        #     inputs=[msg, chatbox, agent_selector], 
+        #     outputs=[chatbox, msg]
+        # )
         
-        clear_btn.click(
-            fn=clear_chat,
-            outputs=chatbox
-        )
+        # clear_btn.click(
+        #     fn=clear_chat,
+        #     outputs=chatbox
+        # )
         
         # Camera refresh handler
         refresh_btn.click(
@@ -462,25 +503,25 @@ def create_interface():
         setup_copy_btn.click(
             fn=copy_to_message,
             inputs=[setup_textbox],
-            outputs=[msg]
+            outputs=[]
         )
         
         pick_copy_btn.click(
             fn=copy_to_message,
             inputs=[pick_place_textbox],
-            outputs=[msg]
+            outputs=[]
         )
         
         stack_copy_btn.click(
             fn=copy_to_message,
             inputs=[stack_textbox],
-            outputs=[msg]
+            outputs=[]
         )
         
         push_copy_btn.click(
             fn=copy_to_message,
             inputs=[push_textbox],
-            outputs=[msg]
+            outputs=[]
         )
 
         # Initial load of camera feeds
@@ -549,4 +590,4 @@ if __name__ == "__main__":
             try:
                 rclpy.shutdown()
             except:
-                pass
+                passmsg
