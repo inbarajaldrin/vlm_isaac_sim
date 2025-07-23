@@ -1,21 +1,22 @@
 import asyncio
-import random
 import gradio as gr
 import numpy as np
 import cv2
 import threading
 import time
-from typing import Optional
-from contextlib import AsyncExitStack
-
-# Fix NumPy compatibility issue
+import queue
 import os
 import sys
+
+# Fix NumPy compatibility issue
 os.environ['NUMPY_ARRAY_API'] = '1'
 
-# Add paths for agent imports
-sys.path.append("/home/aaugus11/Documents/isaac-sim-mcp/agent")
-sys.path.append("/home/aaugus11/Documents/isaac-sim-mcp/isaac_mcp")
+# Add paths for your existing agent imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+isaac_mcp_dir = os.path.join(current_dir, "isaac_mcp")
+sys.path.append(isaac_mcp_dir)
+
+print(f"Looking for isaac_mcp files in: {isaac_mcp_dir}")
 
 # ROS2 imports with better error handling
 ROS2_AVAILABLE = False
@@ -24,7 +25,6 @@ try:
     from rclpy.node import Node
     from sensor_msgs.msg import Image
     
-    # Try cv_bridge import with fallback
     try:
         from cv_bridge import CvBridge
         ROS2_AVAILABLE = True
@@ -39,119 +39,20 @@ except ImportError as e:
     print("Camera feeds will show placeholder images.")
     ROS2_AVAILABLE = False
 
-# MCP imports 
+# Import your existing working code
+WORKING_AGENTS_AVAILABLE = False
 try:
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
-    from anthropic import Anthropic
-    MCP_AVAILABLE = True
-except ImportError:
-    print("MCP not available. Using fallback agent functions.")
-    MCP_AVAILABLE = False
+    from host import MCPHost, check_backend_availability
+    WORKING_AGENTS_AVAILABLE = True
+    print("Working MCP Host imported successfully")
+except ImportError as e:
+    print(f"Working MCP Host not available: {e}")
+    print(f"Make sure host.py is in {isaac_mcp_dir}")
+    WORKING_AGENTS_AVAILABLE = False
 
-# --- MCP Client Integration ---
-class MCPClient:
-    def __init__(self):
-        self.session: Optional[ClientSession] = None
-        self.exit_stack = AsyncExitStack()
-        if MCP_AVAILABLE:
-            try:
-                self.anthropic = Anthropic()
-            except:
-                print("Anthropic API key not found. MCP client will use basic responses.")
-                self.anthropic = None
-
-    async def connect_to_server(self, server_script_path: str = "/home/aaugus11/Documents/isaac-sim-mcp/isaac_mcp/server.py"):
-        """Connect to Isaac Sim MCP server"""
-        if not MCP_AVAILABLE:
-            return False
-            
-        try:
-            server_params = StdioServerParameters(
-                command="python",
-                args=[server_script_path],
-                env=None
-            )
-            
-            stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
-            self.stdio, self.write = stdio_transport
-            self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
-            
-            await self.session.initialize()
-            
-            # List available tools
-            response = await self.session.list_tools()
-            tools = response.tools
-            print("Connected to Isaac Sim MCP server with tools:", [tool.name for tool in tools])
-            return True
-        except Exception as e:
-            print(f"Failed to connect to MCP server: {e}")
-            return False
-
-    async def process_query(self, query: str) -> str:
-        """Process a query using Claude and available MCP tools"""
-        if not MCP_AVAILABLE or not self.session:
-            return "MCP not available or not connected to server."
-        
-        if not self.anthropic:
-            return f"Isaac Sim MCP: Processing '{query}' - Anthropic API not configured"
-        
-        try:
-            # Get available tools
-            response = await self.session.list_tools()
-            tools = response.tools
-            
-            # Format tools for Claude
-            tools_formatted = []
-            for tool in tools:
-                tools_formatted.append({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "input_schema": tool.inputSchema
-                })
-
-            # Send to Claude
-            messages = [{"role": "user", "content": query}]
-            
-            response = self.anthropic.messages.create(
-                model="claude-3-sonnet-20240229",
-                max_tokens=1000,
-                tools=tools_formatted,
-                messages=messages
-            )
-            
-            # Handle tool calls if any
-            if response.stop_reason == "tool_use":
-                for content_block in response.content:
-                    if content_block.type == "tool_use":
-                        tool_name = content_block.name
-                        tool_input = content_block.input
-                        
-                        # Call MCP tool
-                        tool_result = await self.session.call_tool(tool_name, tool_input)
-                        
-                        # Add tool result to conversation and get final response
-                        messages.extend([
-                            {"role": "assistant", "content": response.content},
-                            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": content_block.id, "content": str(tool_result.content)}]}
-                        ])
-                        
-                        final_response = self.anthropic.messages.create(
-                            model="claude-3-sonnet-20240229",
-                            max_tokens=1000,
-                            messages=messages
-                        )
-                        return final_response.content[0].text
-            
-            return response.content[0].text
-            
-        except Exception as e:
-            return f"Error processing query: {e}"
-
-    async def cleanup(self):
-        """Clean up resources"""
-        if self.exit_stack:
-            await self.exit_stack.aclose()
+# Global agent instances
+claude_agent = None
+chatgpt_agent = None
 
 # --- ROS2 Camera Node ---
 if ROS2_AVAILABLE:
@@ -187,7 +88,6 @@ if ROS2_AVAILABLE:
         
         def image_callback(self, msg, topic):
             try:
-                # cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
                 cv_image = self.bridge.imgmsg_to_cv2(msg, "rgb8")
                 self.latest_images[topic] = cv_image
             except Exception as e:
@@ -197,72 +97,98 @@ else:
         def __init__(self):
             self.latest_images = {}
 
-# --- Agent Functions ---
-mcp_client = MCPClient()
+def initialize_working_agents():
+    """Initialize your working agents using existing host.py"""
+    global claude_agent, chatgpt_agent
+    
+    if not WORKING_AGENTS_AVAILABLE:
+        print("Working agents not available")
+        return
+    
+    # Check which backends are available using your existing function
+    available_backends = check_backend_availability()
+    print(f"Available backends: {available_backends}")
+    
+    # Initialize Claude if available
+    if "claude" in available_backends:
+        try:
+            claude_agent = MCPHost("claude")
+            print("Working Claude agent initialized successfully")
+        except Exception as e:
+            print(f"Failed to initialize Claude agent: {e}")
+            claude_agent = None
+    else:
+        print("Claude not available - check ANTHROPIC_API_KEY")
+    
+    # Initialize ChatGPT if available  
+    if "chatgpt" in available_backends:
+        try:
+            chatgpt_agent = MCPHost("chatgpt")
+            print("Working ChatGPT agent initialized successfully")
+        except Exception as e:
+            print(f"Failed to initialize ChatGPT agent: {e}")
+            chatgpt_agent = None
+    else:
+        print("ChatGPT not available - check OPENAI_API_KEY")
 
-def agent_chatgpt(message, history):
-    """ChatGPT agent using OpenAI API"""
-    try:
-        import openai
-        client = openai.OpenAI()  # Uses OPENAI_API_KEY from environment
-        
-        # Build conversation history
-        messages = [
-            {"role": "system", "content": "You are an AI assistant helping with Isaac Sim robotics simulation. You can help with robot control commands, scene setup, and general robotics questions."}
-        ]
-        
-        for msg in history[-10:]:  # Keep last 10 messages for context
-            if isinstance(msg, dict) and msg.get("role") in ["user", "assistant"]:
-                messages.append({"role": msg["role"], "content": msg.get("content", "")})
-        
-        # Add current message
-        messages.append({"role": "user", "content": message})
-        
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=messages,
-            max_tokens=2000,
-            temperature=0.7
-        )
-        
-        return response.choices[0].message.content
-        
-    except ImportError:
-        return "ChatGPT agent not available. Please install the OpenAI library: pip install openai"
-    except Exception as e:
-        return f"ChatGPT agent error: {e}. Make sure OPENAI_API_KEY is set in your environment."
-
-async def agent_isaac_sim_mcp(message, history):
-    """Isaac Sim MCP Agent using real MCP connection"""
-    if not MCP_AVAILABLE:
-        return "MCP not available. Please install required dependencies."
+def run_agent_request(message, history, agent_name):
+    """Run agent request with proper async handling"""
+    result_queue = queue.Queue()
+    
+    def run_in_thread():
+        try:
+            # Create new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                # Convert Gradio history format to your format
+                converted_history = []
+                for msg in history[-10:]:  # Last 10 messages
+                    if isinstance(msg, dict):
+                        converted_history.append({
+                            "role": msg.get("role", "user"),
+                            "content": msg.get("content", ""),
+                            "backend": agent_name.lower()
+                        })
+                
+                # Select the appropriate agent
+                if agent_name == "Claude" and claude_agent:
+                    result = loop.run_until_complete(claude_agent.process_request(message, converted_history))
+                elif agent_name == "ChatGPT" and chatgpt_agent:
+                    result = loop.run_until_complete(chatgpt_agent.process_request(message, converted_history))
+                else:
+                    result = f"{agent_name} agent not available. Please check your API keys."
+                
+                result_queue.put(("success", result))
+            finally:
+                # Clean up the loop
+                try:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        
+                    loop.close()
+                except Exception as cleanup_error:
+                    print(f"Loop cleanup error (non-critical): {cleanup_error}")
+                    
+        except Exception as e:
+            result_queue.put(("error", f"Error running {agent_name} agent: {e}"))
+    
+    # Start thread and wait for result
+    thread = threading.Thread(target=run_in_thread, daemon=True)
+    thread.start()
     
     try:
-        # Connect to MCP server if not already connected
-        if not mcp_client.session:
-            connected = await mcp_client.connect_to_server()
-            if not connected:
-                return "Failed to connect to Isaac Sim MCP server. Please ensure the server is running."
-        
-        # Process the query
-        response = await mcp_client.process_query(message)
-        return response
-        
+        status, result = result_queue.get(timeout=120)  # 2 minute timeout
+        return result if status == "success" else result
+    except queue.Empty:
+        return "Operation timed out after 2 minutes."
     except Exception as e:
-        return f"Error communicating with Isaac Sim: {e}"
-
-def agent_isaac_sim_fallback(message, history):
-    """Fallback Isaac Sim agent for when MCP is not available"""
-    if "scene" in message.lower():
-        return "Isaac Sim: Scene analysis complete. Current objects detected: UR robot, Jenga blocks at various positions."
-    elif "pick" in message.lower() or "place" in message.lower():
-        return "Isaac Sim: Executing pick and place sequence. Moving to target position..."
-    elif "home" in message.lower():
-        return "Isaac Sim: Returning to home position [0.065, -0.385, 0.481, 0, 180, 0]"
-    elif "gripper" in message.lower():
-        return "Isaac Sim: Gripper command received. Adjusting gripper state..."
-    else:
-        return f"Isaac Sim: Processing command '{message}'. Simulation running..."
+        return f"Error in async handling: {e}"
 
 # --- Camera Feed Functions ---
 def get_placeholder_image(width=640, height=480, text="No Camera Feed"):
@@ -286,6 +212,15 @@ def get_camera_feed(topic_name):
             return get_camera_feed.camera_node.latest_images[topic_name]
     
     return get_placeholder_image(text=f"No feed: {topic_name.split('/')[-1]}")
+
+def update_camera_feeds():
+    """Update all camera feeds"""
+    exocentric = get_camera_feed('/exocentric_camera')
+    intel_rgb = get_camera_feed('/intel_camera_rgb') 
+    depth_map = get_camera_feed('/intel_camera_depth')
+    custom_view = get_camera_feed('/custom_camera')
+    
+    return exocentric, intel_rgb, depth_map, custom_view
 
 # --- ROS2 Initialization ---
 def init_ros2():
@@ -316,42 +251,6 @@ def init_ros2():
         get_camera_feed.camera_node = None
         return False
 
-# --- Gradio Interface Functions ---
-def route_agent(message, history, agent_name):
-    """Route message to appropriate agent"""
-    if agent_name == "Random":
-        return agent_random(message, history)
-    elif agent_name == "ChatGPT":
-        return agent_chatgpt(message, history)
-    elif agent_name == "Claude":
-        if MCP_AVAILABLE:
-            # Run async function in event loop
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # Create a new task for the async function
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(asyncio.run, agent_isaac_sim_mcp(message, history))
-                        return future.result(timeout=30)
-                else:
-                    return asyncio.run(agent_isaac_sim_mcp(message, history))
-            except Exception as e:
-                return f"Error: {e}"
-        else:
-            return agent_isaac_sim_fallback(message, history)
-    else:
-        return agent_random(message, history)
-
-def update_camera_feeds():
-    """Update all camera feeds"""
-    exocentric = get_camera_feed('/exocentric_camera')
-    intel_rgb = get_camera_feed('/intel_camera_rgb') 
-    depth_map = get_camera_feed('/intel_camera_depth')
-    custom_view = get_camera_feed('/custom_camera')
-    
-    return exocentric, intel_rgb, depth_map, custom_view
-
 # --- Predefined Prompts ---
 setup_scene_prompt = """Set up a table with 3 objects: a red cube, a blue cylinder, and a green sphere placed randomly."""
 
@@ -380,9 +279,33 @@ def create_interface():
     # Initialize ROS2
     init_ros2()
     
-    with gr.Blocks(title="Robot-Agent Control Panel", theme=gr.themes.Soft()) as demo:
+    # Initialize working agents
+    initialize_working_agents()
+    
+    # Build agent choices - only Claude and ChatGPT
+    agent_choices = []
+    
+    if WORKING_AGENTS_AVAILABLE and claude_agent is not None:
+        agent_choices.append("Claude")
+    if WORKING_AGENTS_AVAILABLE and chatgpt_agent is not None:
+        agent_choices.append("ChatGPT")
+    
+    # Fallback if no agents available
+    if not agent_choices:
+        agent_choices = ["No Agents Available"]
+    
+    with gr.Blocks(title="Isaac Sim Robot Control Panel", theme=gr.themes.Soft()) as demo:
         gr.Markdown("# Isaac Sim Robot Control Panel")
         gr.Markdown("Control your Isaac Sim environment with AI agents and view live camera feeds")
+        
+        # Status display
+        status_items = []
+        status_items.append(f"Claude: {'Available' if WORKING_AGENTS_AVAILABLE and claude_agent else 'Unavailable'}")
+        status_items.append(f"ChatGPT: {'Available' if WORKING_AGENTS_AVAILABLE and chatgpt_agent else 'Unavailable'}")
+        status_items.append(f"ROS2: {'Available' if ROS2_AVAILABLE else 'Unavailable'}")
+        status_items.append(f"Isaac MCP: {'Available' if WORKING_AGENTS_AVAILABLE else 'Unavailable'}")
+        
+        gr.Markdown("**System Status:** " + " | ".join(status_items))
         
         with gr.Row():
             # LEFT side - Agent Control
@@ -390,12 +313,11 @@ def create_interface():
                 gr.Markdown("## AI Agent Control")
                 agent_selector = gr.Dropdown(
                     label="Select AI Agent",
-                    choices=["Claude", "ChatGPT"],
-                    value="Claude",
+                    choices=agent_choices,
+                    value=agent_choices[0],
                     interactive=True
                 )
                 
-                # Fixed chatbot with proper type parameter
                 chatbox = gr.Chatbot(
                     height=400, 
                     label="Agent Communication",
@@ -449,7 +371,7 @@ def create_interface():
                 # Camera refresh button
                 refresh_btn = gr.Button("Refresh Cameras", variant="secondary")
                 
-                # Primitive Commands Section - Below cameras
+                # Primitive Commands Section
                 gr.Markdown("## Primitive Commands")
                 with gr.Tabs():
                     with gr.Tab("Setup Scene"):
@@ -480,7 +402,7 @@ def create_interface():
                         )
                         stack_copy_btn = gr.Button("Copy Stack Command", size="sm")
                     
-                    with gr.Tab("Push Primitive"):
+                    with gr.Tab("Push"):
                         push_textbox = gr.Textbox(
                             value=push_prompt, 
                             lines=3, 
@@ -489,12 +411,16 @@ def create_interface():
                         )
                         push_copy_btn = gr.Button("Copy Push Command", size="sm")
 
-        # Event handlers - Fixed for new Gradio format
+        # Event handlers
         def send_message(message, history, agent_name):
             if message.strip() == "":
                 return history, ""
             
-            response = route_agent(message, history, agent_name)
+            if agent_name == "No Agents Available":
+                response = "No working agents available. Please check your API keys and file paths."
+            else:
+                response = run_agent_request(message, history, agent_name)
+            
             # Add messages in proper format
             new_history = history + [
                 {"role": "user", "content": message},
@@ -568,19 +494,41 @@ def create_interface():
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
-        # Upgrade Gradio if needed
+        print("\n" + "="*60)
+        print("ISAAC SIM ROBOT CONTROL PANEL")
+        print("="*60)
+        
+        # Check Gradio version
         try:
             import gradio
             print(f"Gradio version: {gradio.__version__}")
         except:
             print("Could not determine Gradio version")
         
+        print(f"Looking for isaac_mcp files in: {isaac_mcp_dir}")
+        
         demo = create_interface()
-        print("Starting Gradio interface...")
+        print("\nStarting Gradio interface...")
         print("Available camera topics will be automatically detected")
-        print("Claude Agent:", "Available" if MCP_AVAILABLE else "Using fallback")
-        print("ChatGPT Agent: Install 'openai' library and set OPENAI_API_KEY to enable")
-        print("ROS2:", "Available" if ROS2_AVAILABLE else "Using placeholders")
+        print("="*60)
+        print("AGENT STATUS:")
+        print(f"  Claude Agent: {'Available' if WORKING_AGENTS_AVAILABLE and claude_agent else 'Unavailable'}")
+        print(f"  ChatGPT Agent: {'Available' if WORKING_AGENTS_AVAILABLE and chatgpt_agent else 'Unavailable'}")
+        print(f"  ROS2: {'Available' if ROS2_AVAILABLE else 'Using placeholders'}")
+        print(f"  Isaac MCP: {'Available' if WORKING_AGENTS_AVAILABLE else 'Check file paths'}")
+        print("="*60)
+        
+        if not WORKING_AGENTS_AVAILABLE:
+            print("WARNING: Working agents not available!")
+            print("   Make sure your files are organized like this:")
+            print("   isaac-sim-mcp/")
+            print("   ├── isaac_mcp/")
+            print("   │   ├── host.py")
+            print("   │   ├── client.py") 
+            print("   │   ├── server.py")
+            print("   │   └── main.py")
+            print("   └── gradio_interface.py")
+            print("="*60)
         
         demo.launch(
             server_name="0.0.0.0",
@@ -595,17 +543,10 @@ if __name__ == "__main__":
                 rclpy.shutdown()
             except:
                 pass
-        if MCP_AVAILABLE:
-            asyncio.run(mcp_client.cleanup())
     except Exception as e:
         print(f"Error starting interface: {e}")
         if ROS2_AVAILABLE:
             try:
                 rclpy.shutdown()
-            except:
-                pass
-        if MCP_AVAILABLE:
-            try:
-                asyncio.run(mcp_client.cleanup())
             except:
                 pass
