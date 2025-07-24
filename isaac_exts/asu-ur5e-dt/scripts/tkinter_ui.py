@@ -20,15 +20,8 @@ CAMERA_TOPICS = [
 
 # Prompts
 PROMPTS = {
-    "Setup Scene": """list available topics and read jenga pose.
-set pz values =0 and place the blocks in the scene in isaac sim
-while following this convention
-isaac sim px = -1x px of jenga
-same for y axis 
-
-jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
-
-Rotation- follow [w, x, y, z] order.
+    "Setup Scene": """
+read the pose by listenning to topic of the availble jenga blocks in scene and convert their orientations into rpy
 """,
 
     "Reset Scene": """list available topics and read jenga pose.
@@ -47,19 +40,19 @@ Rotation- follow [w, x, y, z] order.
 
     "Pick & Place": """Step0: pick one jenga block out of available jenga blocks (not the one already moved to new position)
 
-Step1: read jenga block pose : x,y,z , rx,ry,rz using get object info from isaac sim
+Step1: read jenga block pose : x,y,z , rx,ry,rz 
 
-Step2: move UR ee to : -x,-y,z=0.2 with 0,180,0
+Step2: move UR ee to : x,y,z=0.2 with 0,180,0
 
 Step3: move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1
 
-Step4: move UR ee to : -x,-y,z=0.15 with 0,180,(UR rz)
+Step4: move UR ee to : x,y,z=0.15 with 0,180,(UR rz)
 
 Step5: Close gripper 
 
-Step6: move UR ee to : -x,-y,z=0.2 # and confirm grasp visually (access exocentric camera view)
+Step6: move UR ee to : x,y,z=0.2 # and confirm grasp visually (access exocentric camera view)
 
-Step7: set ee orientation with 0,180,(desired final rotation)- no changes if nothing specified
+Step7: set ee orientation with 0,180,(desired final rotation)
 required_rotation = desired_final_rotation - current_jenga_rz new_ee_rz = current_ee_rz + required_rotation
 
 Step8: move UR ee to : final pose x,y,0.2 to drop (Final pose - remember x,y,z in isaac sim is -x,-y ee in UR frame. So if i want to place it at 0.3,0.5 then use -0.3,-0.5 to perform ik calculation.)
@@ -70,7 +63,9 @@ Step10: open gripper
 
 Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0] 
 
-Target Isaac Sim position: [0.3, 0.5] with jenga block position rz 0
+-0.25,-0.5
+-0.25,-0.41
+-0.25,-0.32
 
 repeat till no jenga blocks remain in their initial pose.
 """,
