@@ -16,6 +16,7 @@ from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
 from omni.isaac.core.articulations import Articulation
 import omni.graph.core as og
 import omni.usd
+from pxr import UsdGeom, Gf
 
 class DigitalTwin(omni.ext.IExt):
     def on_startup(self, ext_id):
@@ -98,18 +99,52 @@ class DigitalTwin(omni.ext.IExt):
         world.scene.add_default_ground_plane()
         print("Scene loaded successfully.")
 
+
+
     async def load_ur5e(self):
         asset_path = "omniverse://localhost/Library/ur5e.usd"
-        add_reference_to_stage(usd_path=asset_path, prim_path="/World/UR5e")
+        prim_path = "/World/UR5e"
+        
+        # 1. Add the USD asset
+        add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
 
-        self._ur5e_view = ArticulationView(prim_paths_expr="/World/UR5e", name="ur5e_view")
+        # 2. Wait for prim to exist
+        import time
+        stage = omni.usd.get_context().get_stage()
+        for _ in range(10):
+            prim = stage.GetPrimAtPath(prim_path)
+            if prim.IsValid():
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError(f"Failed to load prim at {prim_path}")
+
+        # 3. Apply translation and orientation
+        xform = UsdGeom.Xform(prim)
+        xform.ClearXformOpOrder()
+
+        # Custom position and orientation
+        position = Gf.Vec3d(0.0, 0.0, 0.0)  # Replace with your desired position
+        rpy_deg = np.array([0.0, 0.0, 180.0])  # Replace with your desired RPY
+        rpy_rad = np.deg2rad(rpy_deg)
+        quat_xyzw = euler_angles_to_quats(rpy_rad)
+        quat = Gf.Quatd(quat_xyzw[0], quat_xyzw[1], quat_xyzw[2], quat_xyzw[3])
+
+        xform.AddTranslateOp().Set(position)
+        xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
+
+        print(f"Applied translation and rotation to {prim_path}")
+
+        # 4. Setup Articulation
+        self._ur5e_view = ArticulationView(prim_paths_expr=prim_path, name="ur5e_view")
         World.instance().scene.add(self._ur5e_view)
         await World.instance().reset_async()
         self._timeline.stop()
 
-        self._articulation = Articulation("/World/UR5e")
+        self._articulation = Articulation(prim_path)
 
         print("UR5e robot loaded successfully!")
+
         
     async def setup_action_graph(self):
         import omni.graph.core as og
@@ -394,14 +429,36 @@ def cleanup(db):
             rg2_prim.CreateAttribute("xformOp:translate", Sdf.ValueTypeNames.Double3).Set(translate_attr.Get())
             rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd).Set(orient_attr.Get())
 
-        # Set orientation for RG2 Gripper
-        print("Setting RG2 gripper orientation...")
+        print("Setting RG2 gripper orientation with 180° Z offset and rotated position...")
+
+        from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
+        import numpy as np
+
         if rg2_prim.IsValid():
-            quat_attr = rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd, custom=True)
-            quat_attr.Set(Gf.Quatd(0.70711, Gf.Vec3d(-0.70711, 0.0, 0.0)))
-            print(" Set xformOp:orient for RG2 gripper.")
+            # === 1. Apply rotated position ===
+            original_pos = translate_attr.Get()
+            x, y, z = original_pos[0], original_pos[1], original_pos[2]
+            rotated_pos = Gf.Vec3d(-x, -y, z)
+
+            # === 2. Apply combined orientation ===
+            fixed_quat = Gf.Quatd(0.70711, Gf.Vec3d(-0.70711, 0.0, 0.0))
+            offset_rpy_deg = np.array([0.0, 0.0, 180.0])
+            offset_rpy_rad = np.deg2rad(offset_rpy_deg)
+            offset_quat_arr = euler_angles_to_quats(offset_rpy_rad)
+            offset_quat = Gf.Quatd(offset_quat_arr[0], offset_quat_arr[1], offset_quat_arr[2], offset_quat_arr[3])
+            final_quat = offset_quat * fixed_quat
+
+            # === 3. Apply to prim ===
+            xform = UsdGeom.Xform(rg2_prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(rotated_pos)
+            xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(final_quat)
+
+            print(f"RG2 position rotated to: {rotated_pos}")
+            print("RG2 orientation set with fixed+180°Z rotation.")
         else:
-            print(f" Gripper not found at {rg2_path}")
+            print(f"Gripper not found at {rg2_path}")
+
 
         # Create or update the physics joint
         if not joint_prim:
