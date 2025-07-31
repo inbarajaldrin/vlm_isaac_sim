@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox, filedialog
 from PIL import Image, ImageTk
 import threading
 import numpy as np
@@ -8,54 +8,68 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image as ROSImage
 from cv_bridge import CvBridge
 import cv2
+import os
+from datetime import datetime
 
 # Camera topics to subscribe
 CAMERA_TOPICS = [
     "/exocentric_camera",
     "/camera/color/image_raw",
     "/intel_camera_rgb",
-    "/intel_camera_depth",
+    "/intel_camera_rgb_raw",
     "/custom_camera"
 ]
 
 # Prompts
 PROMPTS = {
     "Setup Scene": """
-read the pose by listenning to topic of the availble jenga blocks in scene and convert their orientations into rpy
+get topics of jenga blocks
+place the blocks in the scene in isaac sim
+while following this convention
+ px = -1x px of jenga
+ py = -1x py of jenga
+ pz = 0
+
+jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
+Rotation- follow [w, x, y, z] order.
 """,
 
-    "Reset Scene": """list available topics and read jenga pose.
+    "Reset Scene": """list available topics and read jenga pose. Do not load scene
 list prims in isaac sim and find if the jenga blocks are already imported. if they are then just update the pose of the jenga block using the following logic.
 if the jenga block doesnt exist in topics and it exists in isaac sim prim list then delete that prim.
 If there are more jenga blocks in topics and some are missing in the scene, then add new jenga block in the right orientation.
-set pz values =0 and place the blocks in the scene in isaac sim
+place the blocks in the scene in isaac sim
 while following this convention
-isaac sim px = -1x px of jenga
-same for y axis 
+ px = -1x px of jenga
+ py = -1x py of jenga
+ pz = 0
 
 jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
 
 Rotation- follow [w, x, y, z] order.
 """,
 
-    "Pick & Place": """Step0: pick one jenga block out of available jenga blocks (not the one already moved to new position)
+    "Pick & Place": """Open a new claude chat window (disable isaac sim control for real world testing)
+
+    
+Step0: List availbale topics and pick one jenga block out of available jenga blocks (not the one already moved to new position)
 
 Step1: read jenga block pose : x,y,z , rx,ry,rz 
 
-Step2: move UR ee to : x,y,z=0.2 with 0,180,0
+Step2: move UR ee to : x,y,(z=0.25) with 0,180,0
 
-Step3: move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1
+Step3: read jenga block pose again #and update isaac sim scene# and move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1
 
-Step4: move UR ee to : x,y,z=0.15 with 0,180,(UR rz)
+Step4: move UR ee to : x,y,(z=0.15) with 0,180,(UR rz)
 
 Step5: Close gripper 
 
-Step6: move UR ee to : x,y,z=0.2 # and confirm grasp visually (access exocentric camera view)
+Step6: move UR ee to : x,y,(z=0.25) # and confirm grasp visually (access intel_camera_rgb_raw camera view)
 
 Step7: set ee orientation with 0,180,(desired final rotation)
 required_rotation = desired_final_rotation - current_jenga_rz new_ee_rz = current_ee_rz + required_rotation
 
-Step8: move UR ee to : final pose x,y,0.2 to drop (Final pose - remember x,y,z in isaac sim is -x,-y ee in UR frame. So if i want to place it at 0.3,0.5 then use -0.3,-0.5 to perform ik calculation.)
+Step8: move UR ee to : final pose x,y,0.25 to drop (Final pose - remember x,y,z in isaac sim is -x,-y ee in UR frame. So if i want to place it at 0.3,0.5 then use -0.3,-0.5 to perform ik calculation.)
 
 Step9: move the ee z to  0.151
 
@@ -63,11 +77,38 @@ Step10: open gripper
 
 Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0] 
 
+
 -0.25,-0.5
 -0.25,-0.41
 -0.25,-0.32
 
 repeat till no jenga blocks remain in their initial pose.
+
+
+
+
+Step1: List availbale topics and  read jenga block pose : x,y,z , rx,ry,rz   
+
+Step2: move UR ee to : x,y,(z=0.25) with 0,180,0  
+
+Step3: read jenga block pose again #and update isaac sim scene# and move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1  
+
+Step4: move UR ee to : x,y,(z=0.15) with 0,180,(UR rz)  
+
+Step5: Close gripper   
+
+Step6: move UR ee to : x,y,(z=0.25) # and confirm grasp visually (access intel_camera_rgb_raw camera view)  
+
+Step7: set ee orientation with 0,180,(desired final rotation) required_rotation = desired_final_rotation - current_jenga_rz new_ee_rz = current_ee_rz + required_rotation  desired final jenga rpotaion is zero degrees    
+
+Step8: move UR ee to : final pose -0.25,-0.5,0.25 to drop  
+
+Step9: move the ee z to  0.151    
+
+Step10: open gripper    
+
+Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]
+
 """,
 
     "Stack": "Stack the red cube on top of the blue cylinder.",
@@ -96,11 +137,26 @@ class ROS2App:
         self.root = root
         self.root.title("Isaac Sim Control Panel with ROS2")
         self.step_widgets = {}
+        
+        # Recording variables
+        self.recording = False
+        self.video_writers = {}
+        self.recording_folder = None
+        self.frame_count = 0
 
         rclpy.init()
         self.node = CameraNode()
 
-        notebook = ttk.Notebook(root)
+        # Create main container with horizontal layout
+        main_container = ttk.Frame(root)
+        main_container.pack(fill=tk.BOTH, expand=True)
+
+        # Left side - existing camera feeds and prompts
+        left_frame = ttk.Frame(main_container)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Camera feeds
+        notebook = ttk.Notebook(left_frame)
         notebook.pack(fill=tk.BOTH, expand=True)
 
         self.labels = {}
@@ -111,7 +167,8 @@ class ROS2App:
             label.pack()
             self.labels[topic] = label
 
-        prompt_tabs = ttk.Notebook(self.root)
+        # Prompt tabs
+        prompt_tabs = ttk.Notebook(left_frame)
         prompt_tabs.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
         for key, full_text in PROMPTS.items():
@@ -165,11 +222,216 @@ class ROS2App:
                 copy_btn = ttk.Button(frame, text="Copy Full Prompt", command=lambda t=full_text: self.copy_full_prompt(t))
                 copy_btn.pack(pady=5)
 
+        # Right side - Recording panel
+        self.create_recording_panel(main_container)
+
         self.running = True
         threading.Thread(target=self.spin_ros, daemon=True).start()
         self.update_images()
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def create_recording_panel(self, parent):
+        # Right side frame for recording
+        right_frame = ttk.Frame(parent, width=300)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(10, 0))
+        right_frame.pack_propagate(False)
+
+        # Recording panel title
+        title_label = ttk.Label(right_frame, text="Record", font=("Arial", 14, "bold"))
+        title_label.pack(pady=(10, 20))
+
+        # Folder name section
+        folder_name_frame = ttk.Frame(right_frame)
+        folder_name_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(folder_name_frame, text="Folder Name:").pack(anchor="w")
+        self.folder_name_entry = ttk.Entry(folder_name_frame)
+        self.folder_name_entry.pack(fill=tk.X, pady=5)
+
+        # Filename section
+        filename_frame = ttk.Frame(right_frame)
+        filename_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Label(filename_frame, text="Video/Photo Name:").pack(anchor="w")
+        self.filename_entry = ttk.Entry(filename_frame)
+        self.filename_entry.pack(fill=tk.X, pady=5)
+
+        # Recording status
+        self.status_label = ttk.Label(right_frame, text="Status: Ready", foreground="green")
+        self.status_label.pack(pady=10)
+
+        # Folder selection
+        folder_frame = ttk.Frame(right_frame)
+        folder_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Button(folder_frame, text="Select Recording Folder", 
+                  command=self.select_recording_folder).pack(fill=tk.X)
+        
+        self.folder_label = ttk.Label(folder_frame, text="No folder selected", 
+                                     foreground="red", wraplength=280)
+        self.folder_label.pack(pady=5)
+
+        # Recording buttons
+        button_frame = ttk.Frame(right_frame)
+        button_frame.pack(fill=tk.X, padx=10, pady=20)
+
+        self.record_button = ttk.Button(button_frame, text="Start Recording", 
+                                       command=self.start_recording)
+        self.record_button.pack(fill=tk.X, pady=2)
+
+        self.stop_button = ttk.Button(button_frame, text="Stop Recording", 
+                                     command=self.stop_recording, state="disabled")
+        self.stop_button.pack(fill=tk.X, pady=2)
+
+        self.photo_button = ttk.Button(button_frame, text="Take Photo", 
+                                      command=self.take_photo)
+        self.photo_button.pack(fill=tk.X, pady=2)
+
+        # Recording info
+        info_frame = ttk.Frame(right_frame)
+        info_frame.pack(fill=tk.X, padx=10, pady=10)
+        
+        self.recording_info = ttk.Label(info_frame, text="", wraplength=280)
+        self.recording_info.pack()
+
+    def select_recording_folder(self):
+        folder = filedialog.askdirectory(title="Select Recording Folder")
+        if folder:
+            self.recording_folder = folder
+            self.folder_label.config(text=f"Folder: {os.path.basename(folder)}", 
+                                   foreground="green")
+        else:
+            self.recording_folder = None
+            self.folder_label.config(text="No folder selected", foreground="red")
+
+    def toggle_recording(self):
+        # This method is no longer used, keeping for compatibility
+        pass
+
+    def start_recording(self):
+        if not self.recording_folder:
+            messagebox.showerror("Error", "Please select a recording folder first!")
+            return
+
+        if self.recording:
+            messagebox.showwarning("Warning", "Recording is already in progress!")
+            return
+
+        try:
+            # Get folder name from entry field
+            folder_name = self.folder_name_entry.get().strip()
+            if not folder_name:
+                messagebox.showerror("Error", "Please enter a folder name!")
+                return
+            
+            # Get video filename
+            video_filename = self.filename_entry.get().strip()
+            if not video_filename:
+                messagebox.showerror("Error", "Please enter a video/photo name!")
+                return
+            
+            # Create custom folder in the selected recording directory
+            session_folder = os.path.join(self.recording_folder, folder_name)
+            os.makedirs(session_folder, exist_ok=True)
+
+            # Initialize video writers for each camera topic
+            self.video_writers = {}
+            for topic in CAMERA_TOPICS:
+                topic_name = topic.replace("/", "_").strip("_")
+                video_path = os.path.join(session_folder, f"{video_filename}_{topic_name}.avi")
+                
+                # Get current image to determine dimensions
+                img = self.node.images[topic]
+                h, w, _ = img.shape
+                
+                # Create video writer
+                fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                self.video_writers[topic] = cv2.VideoWriter(video_path, fourcc, 10.0, (w, h))
+
+            self.recording = True
+            self.frame_count = 0
+            self.current_session_folder = session_folder
+            self.current_video_name = video_filename
+            
+            # Update UI
+            self.record_button.config(state="disabled")
+            self.stop_button.config(state="normal")
+            self.status_label.config(text="Status: Recording", foreground="red")
+            self.recording_info.config(text=f"Recording: {video_filename}")
+            
+            print(f"Started recording '{video_filename}' to: {session_folder}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to start recording: {str(e)}")
+            print(f"Recording error: {e}")
+
+    def stop_recording(self):
+        if not self.recording:
+            messagebox.showwarning("Warning", "No recording in progress!")
+            return
+
+        try:
+            self.recording = False
+            
+            # Close all video writers
+            for writer in self.video_writers.values():
+                if writer:
+                    writer.release()
+            self.video_writers = {}
+            
+            # Update UI
+            self.record_button.config(state="normal")
+            self.stop_button.config(state="disabled")
+            self.status_label.config(text="Status: Ready", foreground="green")
+            self.recording_info.config(text=f"Recorded {self.frame_count} frames")
+            
+            print(f"Recording stopped. Total frames: {self.frame_count}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to stop recording: {str(e)}")
+            print(f"Stop recording error: {e}")
+
+    def take_photo(self):
+        if not self.recording_folder:
+            messagebox.showerror("Error", "Please select a recording folder first!")
+            return
+            
+        try:
+            # Get folder name from entry field
+            folder_name = self.folder_name_entry.get().strip()
+            if not folder_name:
+                messagebox.showerror("Error", "Please enter a folder name!")
+                return
+            
+            # Get photo filename
+            photo_filename = self.filename_entry.get().strip()
+            if not photo_filename:
+                messagebox.showerror("Error", "Please enter a video/photo name!")
+                return
+            
+            # Create custom folder in the selected recording directory
+            photos_folder = os.path.join(self.recording_folder, folder_name)
+            os.makedirs(photos_folder, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]  # Include milliseconds
+            
+            # Save photo from each camera topic
+            for topic in CAMERA_TOPICS:
+                img = self.node.images[topic]
+                topic_name = topic.replace("/", "_").strip("_")
+                photo_path = os.path.join(photos_folder, f"{photo_filename}_{topic_name}_{timestamp}.jpg")
+                
+                # Convert RGB to BGR for OpenCV
+                img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                cv2.imwrite(photo_path, img_bgr)
+            
+            self.recording_info.config(text=f"Photo saved: {photo_filename}")
+            print(f"Photos saved as '{photo_filename}' with timestamp: {timestamp} in folder: {folder_name}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to take photo: {str(e)}")
+            print(f"Photo error: {e}")
 
     def spin_ros(self):
         try:
@@ -181,6 +443,18 @@ class ROS2App:
         for topic in CAMERA_TOPICS:
             img = self.node.images[topic]
 
+            # Record frame if recording is active
+            if self.recording and topic in self.video_writers:
+                try:
+                    # Convert RGB to BGR for OpenCV video writer
+                    img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    self.video_writers[topic].write(img_bgr)
+                    if topic == CAMERA_TOPICS[0]:  # Only count frames once
+                        self.frame_count += 1
+                except Exception as e:
+                    print(f"Error writing frame for {topic}: {e}")
+
+            # Display image
             max_width = 960
             h, w, _ = img.shape
 
@@ -196,6 +470,7 @@ class ROS2App:
             img_tk = ImageTk.PhotoImage(image=img_pil)
             self.labels[topic].imgtk = img_tk
             self.labels[topic].configure(image=img_tk)
+            
         if self.running:
             self.root.after(100, self.update_images)
 
@@ -212,6 +487,9 @@ class ROS2App:
         self.root.clipboard_append(full_text.strip())
 
     def on_close(self):
+        if self.recording:
+            self.stop_recording()
+        
         self.running = False
         try:
             self.node.destroy_node()
@@ -222,6 +500,6 @@ class ROS2App:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    root.geometry("1200x900")
+    root.geometry("1500x900")  # Made wider to accommodate the new panel
     app = ROS2App(root)
     root.mainloop()

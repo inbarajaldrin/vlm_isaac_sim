@@ -454,7 +454,7 @@ def cleanup(db):
         # Set transform properties
         omni.kit.commands.execute('ChangeProperty',
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:translate",
-                                 value=Gf.Vec3d(-0.012, -0.06, -0.01),
+                                 value=Gf.Vec3d(-0.012, -0.06, -0.01), # fix this
                                  prev=None)
         omni.kit.commands.execute('ChangeProperty',
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:rotateXYZ",
