@@ -22,38 +22,10 @@ CAMERA_TOPICS = [
 
 # Prompts
 PROMPTS = {
-    "Setup Scene": """
-can you import two jenga blocks in isaam sim
-one at -0.25,-0.5,0 and one at -0.5,-0.5,0 or (get topics of jenga blocks)
-use this transformation to transform the above coordintes to isaaac sim frame and then import the jenga block from omniverse://localhost/Library/Aruco/objs/jenga.usd
-here is the transformation:
-
-    Inputs:
-      pos_real: [x, y, z] (real-world, UR5e base frame)
-      quat_real: [x, y, z, w] (real-world orientation)
-    
-    Returns:
-      pos_sim: [x, y, z] for Isaac Sim
-      quat_sim: [w, x, y, z] for Isaac Sim
-
-
-from scipy.spatial.transform import Rotation as R
-def transform_pose_real_to_sim(pos_real, quat_real):
-
-
-    # 1. Mirror X, Y (translation)
-    x_sim = -pos_real[0]
-    y_sim = -pos_real[1]
-    z_sim = pos_real[2]
-    pos_sim = [x_sim, y_sim, z_sim]
-    # 2. Rotate orientation 180° about Z and reorder
-    r_real = R.from_quat(quat_real)              # [x, y, z, w]
-    r_mirror = R.from_euler('z', 180, degrees=True)
-    r_sim = r_mirror * r_real
-    q = r_sim.as_quat()                          # [x, y, z, w]
-    quat_sim = [q[3], q[0], q[1], q[2]]          # reorder to [w, x, y, z]
-    return pos_sim, quat_sim
-
+    "Setup Scene": """list available topics and read jenga pose.
+can you import  jenga blocks in isaam sim
+# -0.25,-0.5,0 and -0.5,-0.5,0
+jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
 """,
 
     "Reset Scene": """list available topics and read jenga pose. Do not load scene
@@ -61,20 +33,15 @@ list prims in isaac sim and find if the jenga blocks are already imported. if th
 if the jenga block doesnt exist in topics and it exists in isaac sim prim list then delete that prim.
 If there are more jenga blocks in topics and some are missing in the scene, then add new jenga block in the right orientation.
 place the blocks in the scene in isaac sim
-while following this convention
- px = -1x px of jenga
- py = -1x py of jenga
- pz = 0
 
 jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
 
-Rotation- follow [w, x, y, z] order.
 """,
 
-    "Pick & Place": """Open a new claude chat window (disable isaac sim control for real world testing)
+    "Pick & Place": """
 
-    
-Step0: List availbale topics and pick one jenga block out of available jenga blocks (not the one already moved to new position)
+    ## move to a closer view to get updated pose of the real wold jenga block and import it to isaac sim. from there dont read pose from topic, read pose from DT. Need a better scene counter.
+Step0: List availbale topics/prims and pick one jenga block out of available jenga blocks (not the one already moved to new position)
 
 Step1: read jenga block pose : x,y,z , rx,ry,rz 
 
@@ -91,7 +58,7 @@ Step6: move UR ee to : x,y,(z=0.25) # and confirm grasp visually (access intel_c
 Step7: set ee orientation with 0,180,(desired final rotation)
 required_rotation = desired_final_rotation - current_jenga_rz new_ee_rz = current_ee_rz + required_rotation
 
-Step8: move UR ee to : final pose x,y,0.25 to drop (Final pose - remember x,y,z in isaac sim is -x,-y ee in UR frame. So if i want to place it at 0.3,0.5 then use -0.3,-0.5 to perform ik calculation.)
+Step8: move UR ee to : final pose x,y,0.25 to drop
 
 Step9: move the ee z to  0.151
 
@@ -99,111 +66,35 @@ Step10: open gripper
 
 Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0] 
 
-
 -0.25,-0.5
 -0.25,-0.41
 -0.25,-0.32
 
 repeat till no jenga blocks remain in their initial pose.
 
-
-
-
-Step1: List availbale topics and  read jenga block pose : x,y,z , rx,ry,rz   
-
-Step2: move UR ee to : x,y,(z=0.25) with 0,180,0  
-
-Step3: read jenga block pose again #and update isaac sim scene# and move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1  
-
-Step4: move UR ee to : x,y,(z=0.15) with 0,180,(UR rz)  
-
-Step5: Close gripper   
-
-Step6: move UR ee to : x,y,(z=0.25) # and confirm grasp visually (access intel_camera_rgb_raw camera view)  
-
-Step7: set ee orientation with 0,180,(desired final rotation) required_rotation = desired_final_rotation - current_jenga_rz new_ee_rz = current_ee_rz + required_rotation  desired final jenga rpotaion is zero degrees    
-
-Step8: move UR ee to : final pose -0.25,-0.5,0.25 to drop  
-
-Step9: move the ee z to  0.151    
-
-Step10: open gripper    
-
-Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]
-
 """,
-    "Pick and place prompt sim": """
-    
-Step1: read jenga block pose : x,y,z , rx,ry,rz (pose of jenga in isaac sim)
-Step2: move UR ee to : x,y,z=0.3 with 0,180,0
-Step3: move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1
-Step4: move UR ee to : x,y,z=0.24 with 0,180,(UR rz)
-Step5: Close gripper and confirm grasp visually (access exocentric camera view)
-Step6: move UR ee to : x,y,z=0.3 
-Step7: set ee orientation with 0,180,(desired final rotation)- no changes if nothing specified
-required_rotation = desired_final_rotation - current_jenga_rz
+    "Stack": """
+can you peform the whole pick and place and stack on top of jenga 2
+use z = 0.162 m in step 9 to place the jenga block down on top of the other
 
-new_ee_rz = current_ee_rz + required_rotation
- 
-Step8: move UR ee to : final pose x,y,0.3 to drop
-Step9: move the ee z to  0.24
-Step10: open gripper
+perform step by step 
+ive refreshed the scene
 
-Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]
+pick and place prompt incase you forgot
 
-Target Isaac Sim position: [0.0, 0.5] with jenga block position rz 30 
-Keep in mind the transformation from isaac sim to real world to perform ik (perform ik tool requires to be in ur5e robot frame)
-
-
-    Inputs:
-      pos_sim: [x, y, z] from Isaac Sim
-      quat_sim: [w, x, y, z] from Isaac Sim
-
-    Returns:
-      pos_real: [x, y, z] in UR5e base frame
-      quat_real: [x, y, z, w] (real-world orientation)
-
-
-from scipy.spatial.transform import Rotation as R
-
-def transform_pose_sim_to_real(pos_sim, quat_sim):
-
-
-    # 1. Un-mirror X, Y (reverse negation)
-    x_real = -pos_sim[0]
-    y_real = -pos_sim[1]
-    z_real = pos_sim[2]
-    pos_real = [x_real, y_real, z_real]
-
-    # 2. Undo 180° Z rotation and convert quaternion
-    quat_xyzw = [quat_sim[1], quat_sim[2], quat_sim[3], quat_sim[0]]  # [x, y, z, w]
-    r_sim = R.from_quat(quat_xyzw)
-    r_unmirror = R.from_euler('z', -180, degrees=True)
-    r_real = r_unmirror * r_sim
-    q = r_real.as_quat()  # [x, y, z, w]
-
-    quat_real = [q[0], q[1], q[2], q[3]]  # already in real-world format
-
-    return pos_real, quat_real
-
-
- 
-    """,
-
-    "Pick and place prompt sim": """
-
-to refresh scene,
-Set jenga block 1 to 0,-0.5 and jenga block 2 to -0.5,-0.5 and move robotic arm to home pose.
-Iteration no.1
-execute pick and place seqeunce of jenga block 1 on top of jenga block 2 using the pick and place prompt i gave earlier.
-the prompt may not work because the offset to stack jenga block on top of one other is not defined. 
-you can use the shape of the object from sim to identify the right offset or after setting a specfic 
-z altitude for dropping the jegna block and opennign the gripper, read the pose of the jenga bloc, if the jenga block 
-is correctly positioned one on top of the other, then we call the iteration success. You need to basically keep 
-updating the z value to move up or down till the operation is a success.
+Step0: List availbale topics/prims and pick one jenga block out of available jenga blocks (not the one already moved to new position)  
+Step1: read jenga block pose : x,y,z , rx,ry,rz   
+Step2: move UR ee to : x,y,(z=0.25) with 0,180,0  
+Step3: read jenga block pose again #and update isaac sim scene# and move ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1  
+Step4: move UR ee to : x,y,(z=0.15) with 0,180,(UR rz)  
+Step5: Close gripper   
+Step6: move UR ee to : x,y,(z=0.25) # and confirm grasp visually (access intel_camera_rgb_raw camera view)  
+Step7: set ee orientation with 0,180,(desired final rotation) required_rotation = desired_final_rotation - current_jenga_rz new_ee_rz = current_ee_rz + required_rotation  
+Step8: move UR ee to : final pose x,y,0.25 to drop  
+Step9: move the ee z to  0.151
+Step10: open gripper  Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]
 
     """,
-    "Stack": "Stack the red cube on top of the blue cylinder.",
 
     "Push": "Push the green sphere 10 cm forward."
 }
