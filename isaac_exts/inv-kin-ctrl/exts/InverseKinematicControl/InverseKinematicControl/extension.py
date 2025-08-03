@@ -24,6 +24,7 @@ class InversekinematiccontrolExtension(omni.ext.IExt):
         self._ik_solver = None
         self._articulation_kinematics_solver = None
         self._articulation = None
+        self._gripper_view = None
 
         # Create the window UI
         self._window = ui.Window("Inverse Kinematics Control", width=300, height=800)
@@ -34,20 +35,26 @@ class InversekinematiccontrolExtension(omni.ext.IExt):
     def create_ui(self):
         with ui.VStack(spacing=5):
             with ui.CollapsableFrame(title="Setup", collapsed=False, height=0):
+                with ui.HStack(spacing=5, height=0):
+                    ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
+                    ui.Button("Play", width=100, height=35, clicked_fn=self.play_simulation)
+                    ui.Button("Stop", width=100, height=35, clicked_fn=self.stop_simulation)
+                    
+            with ui.CollapsableFrame(title="Robotic arm", collapsed=False, height=0):
+                with ui.HStack(spacing=5, height=0):
+                    ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
+                    ui.Button("Load Lula IK Solver", width=150, height=35, clicked_fn=self.load_lula_ik_solver)
+
+            with ui.CollapsableFrame(title="Gripper", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    ui.Label("Simulation Setup", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
-                        ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
-                        ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
-                        ui.Button("Play", width=100, height=35, clicked_fn=self.play_simulation)
-                        ui.Button("Stop", width=100, height=35, clicked_fn=self.stop_simulation)
+                        ui.Button("Import RG2 Gripper", width=150, height=35, clicked_fn=self.import_rg2_gripper)
+                        ui.Button("Attach Gripper to UR5e", width=180, height=35, clicked_fn=self.attach_rg2_to_ur5e)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Open Gripper", width=150, height=35, clicked_fn=self.open_gripper)
+                        ui.Button("Close Gripper", width=150, height=35, clicked_fn=self.close_gripper)
 
-            with ui.CollapsableFrame(title="Inverse Kinematic Solver", collapsed=False, height=0):
-                with ui.VStack(spacing=5, height=0):
-                    ui.Label("Load Lula IK Solver", alignment=ui.Alignment.LEFT)
-                    ui.Button("Load Lula", width=150, height=35, clicked_fn=self.load_lula_ik_solver)
-
-            with ui.CollapsableFrame(title="Joint Control", collapsed=False, height=0):
+            with ui.CollapsableFrame(title="Forward Kinematics", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
                     ui.Label("Joint Control Inputs", alignment=ui.Alignment.LEFT)
                     joint_labels = [
@@ -65,7 +72,7 @@ class InversekinematiccontrolExtension(omni.ext.IExt):
                         ui.Button("Set Joint Values", width=150, height=35, clicked_fn=self._apply_joint_positions)
                         ui.Button("Reset Joint Values", width=150, height=35, clicked_fn=self.reset_joint_positions)
                         
-            with ui.CollapsableFrame(title="Cartesian Control", collapsed=False, height=0):
+            with ui.CollapsableFrame(title="Inverse Kinematics", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
                     ui.Label("Cartesian Control Inputs", alignment=ui.Alignment.LEFT)
                     cartesian_labels = ["X Position", "Y Position", "Z Position", "Roll", "Pitch", "Yaw"]
@@ -88,7 +95,8 @@ class InversekinematiccontrolExtension(omni.ext.IExt):
         print("Scene loaded successfully.")
 
     async def load_ur5e(self):
-        asset_path = get_assets_root_path() + "/Isaac/Robots/UniversalRobots/ur5e/ur5e.usd"
+        # asset_path = get_assets_root_path() + "/Isaac/Robots/UniversalRobots/ur5e/ur5e.usd"
+        asset_path = "omniverse://localhost/NVIDIA/Assets/Isaac/4.5/Isaac/Robots/UniversalRobots/ur5e/ur5e.usd"
         add_reference_to_stage(usd_path=asset_path, prim_path="/World/UR5e")
 
         self._ur5e_view = ArticulationView(prim_paths_expr="/World/UR5e", name="ur5e_view")
@@ -228,6 +236,147 @@ class InversekinematiccontrolExtension(omni.ext.IExt):
         for i, field in enumerate(self._cartesian_input_fields):
             field.model.set_value(self._cartesian_values[i])
         print("Cartesian values reset to defaults.")
+
+    def import_rg2_gripper(self):
+        from omni.isaac.core.utils.stage import add_reference_to_stage
+        rg2_usd_path = "omniverse://localhost/Library/RG2.usd"
+        add_reference_to_stage(rg2_usd_path, "/RG2_Gripper")
+        print("RG2 Gripper imported at /RG2_Gripper")
+
+    def attach_rg2_to_ur5e(self):
+        import omni.usd
+        from pxr import Usd, Sdf, UsdGeom, Gf
+        import math
+
+        stage = omni.usd.get_context().get_stage()
+        ur5e_gripper_path = "/World/UR5e/Gripper"
+        rg2_path = "/RG2_Gripper"
+        joint_path = "/World/UR5e/joints/robot_gripper_joint"
+        rg2_base_link = "/RG2_Gripper/onrobot_rg2_base_link"
+
+        ur5e_prim = stage.GetPrimAtPath(ur5e_gripper_path)
+        rg2_prim = stage.GetPrimAtPath(rg2_path)
+        joint_prim = stage.GetPrimAtPath(joint_path)
+
+        if not ur5e_prim or not rg2_prim:
+            print("Error: UR5e or RG2 gripper prim not found.")
+            return
+
+        # Copy transforms from UR5e gripper to RG2
+        translate_attr = ur5e_prim.GetAttribute("xformOp:translate")
+        orient_attr = ur5e_prim.GetAttribute("xformOp:orient")
+
+        if translate_attr.IsValid() and orient_attr.IsValid():
+            rg2_prim.CreateAttribute("xformOp:translate", Sdf.ValueTypeNames.Double3).Set(translate_attr.Get())
+            rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd).Set(orient_attr.Get())
+
+        # --------- 1. Set orientation for RG2 Gripper ---------
+        print("Setting RG2 gripper orientation...")
+        if rg2_prim.IsValid():
+            quat_attr = rg2_prim.CreateAttribute("xformOp:orient", Sdf.ValueTypeNames.Quatd, custom=True)
+            quat_attr.Set(Gf.Quatd(0.70711, Gf.Vec3d(-0.70711, 0.0, 0.0)))
+            print("Set xformOp:orient for RG2 gripper.")
+        else:
+            print(f"Gripper not found at {rg2_path}")
+
+        # Create or update the physics joint
+        if not joint_prim:
+            joint_prim = stage.DefinePrim(joint_path, "PhysicsFixedJoint")
+
+        joint_prim.CreateRelationship("physics:body1").SetTargets([Sdf.Path(rg2_base_link)])
+        joint_prim.CreateAttribute("physics:jointEnabled", Sdf.ValueTypeNames.Bool).Set(True)
+        joint_prim.CreateAttribute("physics:excludeFromArticulation", Sdf.ValueTypeNames.Bool).Set(True)
+
+        # --------- 2. Set localRot0 and localRot1 for joint ---------
+        print("Setting joint rotation parameters...")
+        if joint_prim.IsValid():
+            def euler_to_quatf(x_deg, y_deg, z_deg):
+                """Convert Euler angles (XYZ order, degrees) to Gf.Quatf"""
+                rx = Gf.Quatf(math.cos(math.radians(x_deg) / 2), Gf.Vec3f(1, 0, 0) * math.sin(math.radians(x_deg) / 2))
+                ry = Gf.Quatf(math.cos(math.radians(y_deg) / 2), Gf.Vec3f(0, 1, 0) * math.sin(math.radians(y_deg) / 2))
+                rz = Gf.Quatf(math.cos(math.radians(z_deg) / 2), Gf.Vec3f(0, 0, 1) * math.sin(math.radians(z_deg) / 2))
+                return rx * ry * rz  # Apply in XYZ order
+
+            # Set the rotation quaternions for proper joint alignment
+            quat0 = euler_to_quatf(-90, 0, -90)
+            quat1 = euler_to_quatf(-180, 90, 0)
+            
+            joint_prim.CreateAttribute("physics:localRot0", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat0)
+            joint_prim.CreateAttribute("physics:localRot1", Sdf.ValueTypeNames.Quatf, custom=True).Set(quat1)
+            print("Set physics:localRot0 and localRot1 for robot_gripper_joint.")
+        else:
+            print(f"Joint not found at {joint_path}")
+
+        print("RG2 successfully attached to UR5e with proper orientation and joint configuration.")
+
+    def open_gripper(self):
+        """Open the RG2 gripper"""
+        if not self._gripper_view:
+            # Initialize gripper view if not already done
+            from omni.isaac.core.articulations import ArticulationView
+            self._gripper_view = ArticulationView(prim_paths_expr="/RG2_Gripper", name="RG2_Gripper_View")
+            
+            # Add to world scene and initialize properly
+            World.instance().scene.add(self._gripper_view)
+            
+            # Make sure simulation is reset to initialize the view
+            asyncio.ensure_future(self._initialize_gripper_and_open())
+        else:
+            asyncio.ensure_future(self._apply_gripper_action(True))
+
+    def close_gripper(self):
+        """Close the RG2 gripper"""
+        if not self._gripper_view:
+            # Initialize gripper view if not already done
+            from omni.isaac.core.articulations import ArticulationView
+            self._gripper_view = ArticulationView(prim_paths_expr="/RG2_Gripper", name="RG2_Gripper_View")
+            
+            # Add to world scene and initialize properly
+            World.instance().scene.add(self._gripper_view)
+            
+            # Make sure simulation is reset to initialize the view
+            asyncio.ensure_future(self._initialize_gripper_and_close())
+        else:
+            asyncio.ensure_future(self._apply_gripper_action(False))
+
+    async def _initialize_gripper_and_open(self):
+        """Initialize gripper and then open it"""
+        await World.instance().reset_async()
+        await self._apply_gripper_action(True)
+
+    async def _initialize_gripper_and_close(self):
+        """Initialize gripper and then close it"""
+        await World.instance().reset_async()
+        await self._apply_gripper_action(False)
+
+    async def _apply_gripper_action(self, open_gripper=True):
+        """Apply gripper action with proper error handling"""
+        try:
+            from omni.isaac.core.utils.types import ArticulationActions
+            import numpy as np
+            
+            if open_gripper:
+                target_positions = np.array([np.pi / 4, np.pi / 4])  # Open position
+                print("Opening RG2 Gripper...")
+            else:
+                target_positions = np.array([-np.pi / 4, -np.pi / 4])  # Close position
+                print("Closing RG2 Gripper...")
+            
+            # Create action
+            action = ArticulationActions(joint_positions=target_positions, joint_indices=np.array([0, 1]))
+            
+            # Apply action
+            self._gripper_view.apply_action(action)
+            
+            if open_gripper:
+                print("RG2 Gripper opened successfully.")
+            else:
+                print("RG2 Gripper closed successfully.")
+                
+        except Exception as e:
+            print(f"Error controlling gripper: {e}")
+            print("Make sure the simulation is playing and the gripper is properly attached.")
+            
 
     def on_shutdown(self):
         print("[InverseKinematicControl] inv kin ctrl shutdown")
