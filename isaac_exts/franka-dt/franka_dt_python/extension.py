@@ -35,7 +35,8 @@ class FrankaOpenDrawerPolicy(PolicyController):
         """Initialize franka robot"""
         
         if usd_path == None:
-            usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/5.0/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd"
+            usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/5.0/Isaac/Robots/FrankaRobotics/FrankaPanda/franka.usd"#for .pt
+            # usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/4.5/Isaac/Robots/Franka/franka_instanceable.usd"#for .pth
 
         super().__init__(name, prim_path, root_path, usd_path, position, orientation)
 
@@ -439,9 +440,9 @@ class FrankaExtension(omni.ext.IExt):
         self._pt_policy_path = "omniverse://localhost/NVIDIA/Assets/Isaac/5.0/Isaac/Samples/Policies/Franka_Policies/Open_Drawer_Policy/policy.pt"
         self._pt_env_path = "omniverse://localhost/NVIDIA/Assets/Isaac/5.0/Isaac/Samples/Policies/Franka_Policies/Open_Drawer_Policy/env.yaml"
         
-        self._pth_policy_path = "/home/aaugus11/IsaacLab/logs/rl_games/franka_open_drawer/2025-08-03_15-29-25/nn/franka_open_drawer.pth"
-        self._pth_env_path = "/home/aaugus11/IsaacLab/logs/rl_games/franka_open_drawer/2025-08-03_15-29-25/params/env.yaml"
-        self._pth_agent_path = "/home/aaugus11/IsaacLab/logs/rl_games/franka_open_drawer/2025-08-03_15-29-25/params/agent.yaml"
+        self._pth_policy_path = "/home/aaugus11/IsaacLab/logs/rl_games/franka_open_drawer/2025-08-04_08-14-27/nn/franka_open_drawer.pth"
+        self._pth_env_path = "/home/aaugus11/IsaacLab/logs/rl_games/franka_open_drawer/2025-08-04_08-14-27/params/env.yaml"
+        self._pth_agent_path = "/home/aaugus11/IsaacLab/logs/rl_games/franka_open_drawer/2025-08-04_08-14-27/params/agent.yaml"
 
         # Create the window UI
         self._window = ui.Window("Franka Control", width=350, height=400)

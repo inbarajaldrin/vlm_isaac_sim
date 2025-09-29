@@ -35,11 +35,15 @@ If there are more jenga blocks in topics and some are missing in the scene, then
 place the blocks in the scene in isaac sim
 
 jenga blocks at omniverse://localhost/Library/Aruco/objs/jenga.usd
+""",
 
+    "Hover": """Step0: List availbale topics/prims and pick one jenga block out of available jenga blocks
+Step1: read jenga block pose : x,y,z , rx,ry,rz 
+Step2: move UR ee to : x,y,(z=0.25) with 0,180,0
+Step3: reorient ee orientation to pick jenga block = 0,180,(UR rz) where UR rz= (90-Jenga rz)x-1
 """,
 
     "Pick & Place": """
-
     ## move to a closer view to get updated pose of the real wold jenga block and import it to isaac sim. from there dont read pose from topic, read pose from DT. Need a better scene counter.
 Step0: List availbale topics/prims and pick one jenga block out of available jenga blocks (not the one already moved to new position)
 
@@ -71,8 +75,8 @@ Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]
 -0.25,-0.32
 
 repeat till no jenga blocks remain in their initial pose.
-
 """,
+
     "Stack": """
 can you peform the whole pick and place and stack on top of jenga 2
 use z = 0.162 m in step 9 to place the jenga block down on top of the other
@@ -93,7 +97,6 @@ Step7: set ee orientation with 0,180,(desired final rotation) required_rotation 
 Step8: move UR ee to : final pose x,y,0.25 to drop  
 Step9: move the ee z to  0.151
 Step10: open gripper  Step11: go home: HOME_POSE = [0.065, -0.385, 0.481, 0, 180, 0]
-
     """,
 
     "Push": "Push the green sphere 10 cm forward."
