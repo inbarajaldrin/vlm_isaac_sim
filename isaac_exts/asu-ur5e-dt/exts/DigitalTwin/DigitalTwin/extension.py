@@ -3,10 +3,8 @@ import omni.ui as ui
 import asyncio
 import numpy as np
 import os
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import String
 import threading
+
 from omni.isaac.core.world import World
 from omni.isaac.core.utils.stage import add_reference_to_stage
 from omni.isaac.core.articulations import ArticulationView
@@ -27,13 +25,8 @@ class DigitalTwin(omni.ext.IExt):
         self._articulation = None
         self._gripper_view = None
 
-        # Initialize ROS2 only once
-        try:
-            if not rclpy.ok():
-                rclpy.init()
-                print("ROS2 initialized successfully")
-        except Exception as e:
-            print(f"Failed to initialize ROS2: {e}")
+        # Isaac Sim handles ROS2 initialization automatically through its bridge
+        print("ROS2 bridge will be initialized by Isaac Sim when needed")
 
         # Create the window UI
         self._window = ui.Window("UR5e Digital Twin", width=300, height=800)  # Increased height
@@ -154,8 +147,8 @@ class DigitalTwin(omni.ext.IExt):
         print("Setting up ROS 2 Action Graph...")
 
         # Ensure extensions are enabled
-        enable_extension("omni.isaac.ros2_bridge")
-        enable_extension("omni.isaac.core_nodes")
+        enable_extension("isaacsim.ros2.bridge")
+        enable_extension("isaacsim.core.nodes")
         enable_extension("omni.graph.action")
 
         graph_path = "/ActionGraph"
@@ -167,11 +160,11 @@ class DigitalTwin(omni.ext.IExt):
             {
                 og.Controller.Keys.CREATE_NODES: [
                     ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-                    ("ros2_context", "omni.isaac.ros2_bridge.ROS2Context"),
-                    ("isaac_read_simulation_time", "omni.isaac.core_nodes.IsaacReadSimulationTime"),
-                    ("ros2_subscribe_joint_state", "omni.isaac.ros2_bridge.ROS2SubscribeJointState"),
-                    ("ros2_publish_clock", "omni.isaac.ros2_bridge.ROS2PublishClock"),
-                    ("articulation_controller", "omni.isaac.core_nodes.IsaacArticulationController"),
+                    ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+                    ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
+                    ("ros2_subscribe_joint_state", "isaacsim.ros2.bridge.ROS2SubscribeJointState"),
+                    ("ros2_publish_clock", "isaacsim.ros2.bridge.ROS2PublishClock"),
+                    ("articulation_controller", "isaacsim.core.nodes.IsaacArticulationController"),
                 ],
                 og.Controller.Keys.SET_VALUES: [
                     ("ros2_context.inputs:useDomainIDEnvVar", True),
@@ -223,8 +216,8 @@ class DigitalTwin(omni.ext.IExt):
             {
                 keys.CREATE_NODES: [
                     (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
-                    (f"{graph_path}/context", "omni.isaac.ros2_bridge.ROS2Context"),
-                    (f"{graph_path}/subscriber", "omni.isaac.ros2_bridge.ROS2Subscriber"),
+                    (f"{graph_path}/context", "isaacsim.ros2.bridge.ROS2Context"),
+                    (f"{graph_path}/subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
                     (f"{graph_path}/script", "omni.graph.scriptnode.ScriptNode")
                 ]
             }
@@ -492,7 +485,7 @@ def cleanup(db):
 
     def import_realsense_camera(self):
         """Import Intel RealSense D455 camera"""
-        usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/4.5/Isaac/Sensors/Intel/RealSense/rsd455.usd"
+        usd_path = "omniverse://localhost/NVIDIA/Assets/Isaac/5.0/Isaac/Sensors/Intel/RealSense/rsd455.usd"
         filename = os.path.splitext(os.path.basename(usd_path))[0]
         prim_path = f"/World/{filename}"
         add_reference_to_stage(usd_path=usd_path, prim_path=prim_path)
@@ -514,8 +507,8 @@ def cleanup(db):
                                  value=Gf.Vec3d(-0.012, -0.06, -0.01), # fix this
                                  prev=None)
         omni.kit.commands.execute('ChangeProperty',
-                                 prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:rotateXYZ",
-                                 value=Gf.Vec3d(0, 270, 90),
+                                 prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:rotateZYX",
+                                 value=Gf.Vec3d(-90, 0, 270),
                                  prev=None)
         
         print("RealSense camera attached to UR5e wrist_3_link")
@@ -544,10 +537,10 @@ def cleanup(db):
         # Create nodes
         nodes = [
             ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-            ("isaac_run_one_simulation_frame", "omni.isaac.core_nodes.OgnIsaacRunOneSimulationFrame"),
-            ("isaac_create_render_product", "omni.isaac.core_nodes.IsaacCreateRenderProduct"),
-            ("ros2_context", "omni.isaac.ros2_bridge.ROS2Context"),
-            ("ros2_camera_helper", "omni.isaac.ros2_bridge.ROS2CameraHelper"),
+            ("isaac_run_one_simulation_frame", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+            ("isaac_create_render_product", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+            ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+            ("ros2_camera_helper", "isaacsim.ros2.bridge.ROS2CameraHelper"),
         ]
         
         print("\nCreating nodes...")
@@ -697,10 +690,10 @@ def cleanup(db):
         # Create nodes
         nodes = [
             ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
-            ("isaac_run_one_simulation_frame", "omni.isaac.core_nodes.OgnIsaacRunOneSimulationFrame"),
-            ("isaac_create_render_product", "omni.isaac.core_nodes.IsaacCreateRenderProduct"),
-            ("ros2_context", "omni.isaac.ros2_bridge.ROS2Context"),
-            ("ros2_camera_helper", "omni.isaac.ros2_bridge.ROS2CameraHelper"),
+            ("isaac_run_one_simulation_frame", "isaacsim.core.nodes.OgnIsaacRunOneSimulationFrame"),
+            ("isaac_create_render_product", "isaacsim.core.nodes.IsaacCreateRenderProduct"),
+            ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+            ("ros2_camera_helper", "isaacsim.ros2.bridge.ROS2CameraHelper"),
         ]
         
         print("\nCreating nodes...")
@@ -760,12 +753,8 @@ def cleanup(db):
         """Clean shutdown"""
         print("[DigitalTwin] Digital Twin shutdown")
         
-        # Shutdown ROS2
-        try:
-            if rclpy.ok():
-                rclpy.shutdown()
-        except Exception as e:
-            print(f"ROS2 shutdown error: {e}")
+        # Isaac Sim handles ROS2 shutdown automatically
+        print("ROS2 bridge shutdown handled by Isaac Sim")
         
         # Destroy window
         if self._window:
