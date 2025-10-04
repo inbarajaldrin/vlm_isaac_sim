@@ -1,0 +1,28 @@
+[package]
+name = "my_extension_template"
+version = "0.1.0"
+title = "My Extension Template"
+description = "A template extension for Isaac Sim"
+category = "Development"
+keywords = ["template", "extension", "isaac", "sim"]
+
+[dependencies]
+"omni.isaac.core" = {}
+"omni.kit.uiapp" = {}
+"omni.isaac.ui" = {}
+
+
+
+# Main python module this extension provides, it will be publicly available as "import my_extension_template".
+[[python.module]]
+name = "my_extension_template"
+
+
+
+[python.pipapi]
+
+
+[settings]
+# Add your extension settings here
+# example.setting = "default_value"
+
