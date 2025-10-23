@@ -151,7 +151,7 @@ class DigitalTwin(omni.ext.IExt):
         enable_extension("isaacsim.core.nodes")
         enable_extension("omni.graph.action")
 
-        graph_path = "/ActionGraph"
+        graph_path = "/World/Graphs/ActionGraph_UR5e"
         (graph, nodes, _, _) = og.Controller.edit(
             {
                 "graph_path": graph_path,
@@ -200,7 +200,7 @@ class DigitalTwin(omni.ext.IExt):
         """Setup gripper action graph for ROS2 control"""
         print("Setting up Gripper Action Graph...")
         
-        graph_path = "/World/ActionGraph"
+        graph_path = "/World/Graphs/ActionGraph_RG2"
         
         # Delete existing
         stage = omni.usd.get_context().get_stage()
@@ -266,7 +266,7 @@ def setup(db):
     global gripper_view
     try:
         # Always create a fresh gripper view in setup
-        gripper_view = ArticulationView(prim_paths_expr="/RG2_Gripper", name="gripper")
+        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
         gripper_view.initialize()
         db.log_info("Gripper initialized successfully")
     except Exception as e:
@@ -303,7 +303,7 @@ def compute(db):
         if current_frame < last_sim_frame or last_sim_frame == -1:
             db.log_info("Simulation restart detected, reinitializing gripper...")
             try:
-                gripper_view = ArticulationView(prim_paths_expr="/RG2_Gripper", name="gripper")
+                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
                 gripper_view.initialize()
                 db.log_info("Gripper reinitialized after restart")
             except Exception as e:
@@ -382,7 +382,7 @@ def cleanup(db):
                 print(f"Failed {desc}: {e}")
         
         print(f"Graph created with {success_count}/4 connections!")
-        print("Location: /World/ActionGraph")
+        print("Location: /World/Graphs/ActionGraph_RG2")
         print("Test commands:")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"open\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
@@ -392,8 +392,8 @@ def cleanup(db):
     def import_rg2_gripper(self):
         from omni.isaac.core.utils.stage import add_reference_to_stage
         rg2_usd_path = "omniverse://localhost/Library/RG2.usd"
-        add_reference_to_stage(rg2_usd_path, "/RG2_Gripper")
-        print("RG2 Gripper imported at /RG2_Gripper")
+        add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
+        print("RG2 Gripper imported at /World/RG2_Gripper")
 
     def attach_rg2_to_ur5e(self):
         import omni.usd
@@ -402,9 +402,9 @@ def cleanup(db):
 
         stage = omni.usd.get_context().get_stage()
         ur5e_gripper_path = "/World/UR5e/Gripper"
-        rg2_path = "/RG2_Gripper"
+        rg2_path = "/World/RG2_Gripper"
         joint_path = "/World/UR5e/joints/robot_gripper_joint"
-        rg2_base_link = "/RG2_Gripper/onrobot_rg2_base_link"
+        rg2_base_link = "/World/RG2_Gripper/onrobot_rg2_base_link"
 
         ur5e_prim = stage.GetPrimAtPath(ur5e_gripper_path)
         rg2_prim = stage.GetPrimAtPath(rg2_path)
@@ -504,7 +504,7 @@ def cleanup(db):
         # Set transform properties
         omni.kit.commands.execute('ChangeProperty',
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:translate",
-                                 value=Gf.Vec3d(-0.012, -0.055, 0.1), # fix this
+                                 value=Gf.Vec3d(-0.012, -0.055, 0.1),
                                  prev=None)
         omni.kit.commands.execute('ChangeProperty',
                                  prop_path="/World/UR5e/wrist_3_link/rsd455.xformOp:rotateZYX",
@@ -517,11 +517,11 @@ def cleanup(db):
         """Create ActionGraph for camera ROS2 publishing"""
         # Configuration
         CAMERA_PRIM = "/World/UR5e/wrist_3_link/rsd455/RSD455/Camera_OmniVision_OV9782_Color" 
-        IMAGE_WIDTH = 640
-        IMAGE_HEIGHT = 480
-        ROS2_TOPIC = "intel_camera_rgb"
+        IMAGE_WIDTH = 1280
+        IMAGE_HEIGHT = 720
+        ROS2_TOPIC = "intel_camera_rgb_sim"
         
-        graph_path = "/World/ActionGraph_Camera"  # Different name to avoid conflicts
+        graph_path = "/World/Graphs/ActionGraph_Camera"  # Different name to avoid conflicts
         print(f"Creating ActionGraph: {graph_path}")
         print(f"Camera: {CAMERA_PRIM}")
         print(f"Resolution: {IMAGE_WIDTH}x{IMAGE_HEIGHT}")
@@ -674,7 +674,7 @@ def cleanup(db):
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
         """Helper method to create camera ActionGraph"""
-        graph_path = f"/World/ActionGraph_{graph_suffix}"
+        graph_path = f"/World/Graphs/ActionGraph_{graph_suffix}"
         print(f"Creating ActionGraph: {graph_path}")
         print(f"Camera: {camera_prim}")
         print(f"Resolution: {width}x{height}")
