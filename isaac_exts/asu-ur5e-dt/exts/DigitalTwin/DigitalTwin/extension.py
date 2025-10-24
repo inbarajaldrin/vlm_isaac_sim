@@ -29,6 +29,9 @@ class DigitalTwin(omni.ext.IExt):
         
         # Add Objects UI state
         self._objects_folder_path = "omniverse://localhost/Library/DT demo/aruco_fmb/"
+        self._object_spacing = 0.25  # Spacing between objects along X-axis in meters
+        self._y_offset = -0.5  # Y offset for all objects
+        self._z_offset = 0.0495  # Z offset for all objects
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
@@ -47,7 +50,7 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
-                        ui.Button("Setup Action Graph", width=180, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
+                        ui.Button("Setup UR5e Action Graph", width=200, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
 
             with ui.CollapsableFrame(title="RG2 Gripper", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -105,6 +108,7 @@ class DigitalTwin(omni.ext.IExt):
                     # Add Objects button
                     with ui.HStack(spacing=5):
                         ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
+                        ui.Button("Setup pose publisher action graph", width=250, height=35, clicked_fn=self.create_pose_publisher)
 
     async def load_scene(self):
         world = World()
@@ -821,21 +825,176 @@ def cleanup(db):
                     # First object at center (0, 0, 0)
                     x_position = 0.0
                 else:
-                    # Calculate position: alternating +X and -X, 0.25m apart
+                    # Calculate position: alternating +X and -X, using configurable spacing
                     if i % 2 == 1:  # Odd indices: +X direction
-                        x_position = 0.25 * ((i + 1) // 2)
+                        x_position = self._object_spacing * ((i + 1) // 2)
                     else:  # Even indices: -X direction
-                        x_position = -0.25 * (i // 2)
+                        x_position = -self._object_spacing * (i // 2)
                 
-                # Apply position to the prim
+                # Apply position to the parent prim
                 from pxr import UsdGeom, Gf
                 xform = UsdGeom.Xform(prim)
                 xform.ClearXformOpOrder()
-                xform.AddTranslateOp().Set(Gf.Vec3d(x_position, -0.5, 0.0))
+                xform.AddTranslateOp().Set(Gf.Vec3d(x_position, self._y_offset, self._z_offset))
                 
-                print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, -0.5, 0.0)")
+                # Rename Body1 to match the object name
+                def rename_body1_to_object_name(stage, prim_path, object_name):
+                    """Recursively search for Body1 and rename it to object_name"""
+                    prim = stage.GetPrimAtPath(prim_path)
+                    if not prim:
+                        return False
+                    
+                    # Search for Body1 in the hierarchy
+                    for child in prim.GetAllChildren():
+                        if child.GetName() == "Body1":
+                            # Found Body1, rename it
+                            new_path = child.GetPath().GetParentPath().AppendChild(object_name)
+                            import omni.kit.commands
+                            omni.kit.commands.execute('MovePrim',
+                                path_from=child.GetPath(),
+                                path_to=new_path)
+                            print(f"Renamed Body1 to {object_name} at {new_path}")
+                            return True
+                        # Recursively search in children
+                        if rename_body1_to_object_name(stage, child.GetPath(), object_name):
+                            return True
+                    return False
+                
+                # Try to rename Body1 to the object name
+                rename_body1_to_object_name(stage, prim_path, base_name)
+                
+                print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
         else:
             print(f"Failed to list folder: {folder_path}")
+
+    def create_pose_publisher(self):
+        """Create action graph for publishing object poses to ROS2"""
+        import omni.kit.commands
+        from pxr import Sdf, Usd, UsdGeom
+        import omni.usd
+        import omni.graph.core as og
+
+        def get_objects_in_folder(stage, folder_path="/World/Objects"):
+            """
+            Scan the Objects folder and find all prims following the pattern:
+            /World/Objects/{object_name}/{object_name}/{object_name}
+            
+            Args:
+                stage: USD Stage
+                folder_path: Path to the Objects folder
+            
+            Returns:
+                List of paths to object prims
+            """
+            body_paths = []
+            
+            # Get the Objects prim
+            objects_prim = stage.GetPrimAtPath(folder_path)
+            
+            if not objects_prim.IsValid():
+                print(f"Warning: {folder_path} does not exist")
+                return body_paths
+            
+            # Iterate through children (e.g., fork_orange, base, fork_yellow, line_brown)
+            for child in objects_prim.GetChildren():
+                object_name = child.GetName()
+                
+                # Look for the nested structure: {object_name}/{object_name}/object_name{}
+                nested_path = f"{folder_path}/{object_name}/{object_name}/{object_name}"
+                nested_prim = stage.GetPrimAtPath(nested_path)
+                
+                if nested_prim.IsValid():
+                    body_paths.append(nested_path)
+                    print(f"Found: {nested_path}")
+            
+            return body_paths
+
+        def create_action_graph_with_transforms(target_prims, parent_prim="/World", topic_name="objects_poses_sim"):
+            """
+            Create an action graph with OnPlaybackTick and ROS2PublishTransformTree nodes
+            
+            Args:
+                target_prims: List of prim paths to publish transforms for
+                parent_prim: Parent prim for the transform tree
+                topic_name: ROS2 topic name
+            """
+            
+            graph_path = "/World/ActionGraph"
+            
+            # Create the action graph using OmniGraph API
+            keys = og.Controller.Keys
+            
+            (graph, nodes, _, _) = og.Controller.edit(
+                {
+                    "graph_path": graph_path,
+                    "evaluator_name": "execution",
+                },
+                {
+                    keys.CREATE_NODES: [
+                        ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                        ("ros2_publish_transform_tree", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
+                    ],
+                    keys.CONNECT: [
+                        ("on_playback_tick.outputs:tick", "ros2_publish_transform_tree.inputs:execIn"),
+                    ],
+                    keys.SET_VALUES: [
+                        ("ros2_publish_transform_tree.inputs:topicName", topic_name),
+                    ],
+                },
+            )
+            
+            # Get the stage to set relationships
+            stage = omni.usd.get_context().get_stage()
+            
+            # Get the ROS2 node prim
+            ros2_node_path = f"{graph_path}/ros2_publish_transform_tree"
+            ros2_prim = stage.GetPrimAtPath(ros2_node_path)
+            
+            if ros2_prim.IsValid():
+                # Set parent prim as a relationship
+                parent_rel = ros2_prim.GetRelationship("inputs:parentPrim")
+                if not parent_rel:
+                    parent_rel = ros2_prim.CreateRelationship("inputs:parentPrim", custom=True)
+                parent_rel.SetTargets([Sdf.Path(parent_prim)])
+                
+                # Set target prims as a relationship
+                target_rel = ros2_prim.GetRelationship("inputs:targetPrims")
+                if not target_rel:
+                    target_rel = ros2_prim.CreateRelationship("inputs:targetPrims", custom=True)
+                target_paths = [Sdf.Path(path) for path in target_prims]
+                target_rel.SetTargets(target_paths)
+                
+                print(f"Action graph created at {graph_path}")
+                print(f"Publishing {len(target_prims)} objects to topic: {topic_name}")
+            else:
+                print(f"Error: Could not find ROS2 node at {ros2_node_path}")
+
+        # Get the current USD stage
+        stage = omni.usd.get_context().get_stage()
+        
+        if not stage:
+            print("Error: No stage found")
+            return
+        
+        # Get all Body1 prims from the Objects folder
+        object_paths = get_objects_in_folder(stage, "/World/Objects")
+        
+        if not object_paths:
+            print("No objects found in /World/Objects")
+            return
+        
+        print(f"\nFound {len(object_paths)} objects:")
+        for path in object_paths:
+            print(f"  - {path}")
+        
+        # Create the action graph with all found objects
+        create_action_graph_with_transforms(
+            target_prims=object_paths,
+            parent_prim="/World",
+            topic_name="objects_poses_sim"
+        )
+        
+        print("\nAction graph created successfully!")
 
     def on_shutdown(self):
         """Clean shutdown"""
