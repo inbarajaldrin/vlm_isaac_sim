@@ -4,6 +4,8 @@ import asyncio
 import numpy as np
 import os
 import threading
+import glob
+import omni.client
 
 from omni.isaac.core.world import World
 from omni.isaac.core.utils.stage import add_reference_to_stage
@@ -14,7 +16,7 @@ from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
 from omni.isaac.core.articulations import Articulation
 import omni.graph.core as og
 import omni.usd
-from pxr import UsdGeom, Gf
+from pxr import UsdGeom, Gf, Sdf
 
 class DigitalTwin(omni.ext.IExt):
     def on_startup(self, ext_id):
@@ -24,6 +26,9 @@ class DigitalTwin(omni.ext.IExt):
         self._ur5e_view = None
         self._articulation = None
         self._gripper_view = None
+        
+        # Add Objects UI state
+        self._objects_folder_path = "omniverse://localhost/Library/DT demo/aruco_fmb/"
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
@@ -85,6 +90,21 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.HStack(spacing=5):
                         ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
                         ui.Button("Create Action Graph", width=180, height=35, clicked_fn=self.create_additional_camera_actiongraph)
+
+            # Add Objects section
+            with ui.CollapsableFrame(title="Add Objects", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("Import Objects from Folder", alignment=ui.Alignment.LEFT)
+                    
+                    # Folder path input
+                    with ui.HStack(spacing=5):
+                        ui.Label("Objects Folder Path:", alignment=ui.Alignment.LEFT, width=150)
+                        self._objects_path_field = ui.StringField(width=300)
+                        self._objects_path_field.model.set_value(self._objects_folder_path)
+                    
+                    # Add Objects button
+                    with ui.HStack(spacing=5):
+                        ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
 
     async def load_scene(self):
         world = World()
@@ -748,6 +768,74 @@ def cleanup(db):
         
         print(f"\n{graph_suffix} ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{topic}")
+
+    def add_objects(self):
+        """Import all objects from the specified folder into the scene"""
+        # Get the folder path from the UI
+        folder_path = self._objects_path_field.model.get_value_as_string()
+        if not folder_path:
+            print("Error: No folder path specified")
+            return
+        
+        print(f"Adding objects from folder: {folder_path}")
+        
+        # Get the current stage and selection
+        stage = omni.usd.get_context().get_stage()
+        selection = omni.usd.get_context().get_selection()
+        selected_paths = selection.get_selected_prim_paths()
+
+        # Use current selection or fallback to /World/Objects
+        if selected_paths:
+            target_path = selected_paths[0]
+        else:
+            target_path = "/World/Objects"
+            from pxr import UsdGeom
+            if not stage.GetPrimAtPath(target_path):
+                UsdGeom.Xform.Define(stage, target_path)
+
+        # List all files in the folder
+        result, entries = omni.client.list(folder_path)
+
+        if result == omni.client.Result.OK:
+            # Filter for USD files
+            usd_files = [entry.relative_path for entry in entries 
+                         if entry.relative_path.endswith(('.usd', '.usda', '.usdc'))]
+            
+            print(f"Found {len(usd_files)} USD files")
+            
+            # Import each USD file with positioning
+            for i, usd_file in enumerate(usd_files):
+                usd_file_path = folder_path + usd_file
+                
+                # Create a child prim under the selected path
+                base_name = os.path.splitext(usd_file)[0]
+                prim_path = f"{target_path}/{base_name}"
+                
+                # Create a reference to the USD file
+                prim = stage.DefinePrim(prim_path)
+                references = prim.GetReferences()
+                references.AddReference(usd_file_path)
+                
+                # Position objects: first at center, then alternating +X and -X
+                if i == 0:
+                    # First object at center (0, 0, 0)
+                    x_position = 0.0
+                else:
+                    # Calculate position: alternating +X and -X, 0.25m apart
+                    if i % 2 == 1:  # Odd indices: +X direction
+                        x_position = 0.25 * ((i + 1) // 2)
+                    else:  # Even indices: -X direction
+                        x_position = -0.25 * (i // 2)
+                
+                # Apply position to the prim
+                from pxr import UsdGeom, Gf
+                xform = UsdGeom.Xform(prim)
+                xform.ClearXformOpOrder()
+                xform.AddTranslateOp().Set(Gf.Vec3d(x_position, -0.5, 0.0))
+                
+                print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, -0.5, 0.0)")
+        else:
+            print(f"Failed to list folder: {folder_path}")
 
     def on_shutdown(self):
         """Clean shutdown"""
