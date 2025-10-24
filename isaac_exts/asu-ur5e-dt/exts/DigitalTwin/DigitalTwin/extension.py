@@ -49,6 +49,12 @@ class DigitalTwin(omni.ext.IExt):
                     ui.Label("Simulation Setup", alignment=ui.Alignment.LEFT)
                     with ui.HStack(spacing=5):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
+                        ui.Button("Refresh Graphs", width=120, height=35, clicked_fn=self.refresh_graphs)
+
+            with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
+                with ui.VStack(spacing=5, height=0):
+                    ui.Label("UR5e Robot Control", alignment=ui.Alignment.LEFT)
+                    with ui.HStack(spacing=5):
                         ui.Button("Load UR5e", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_ur5e()))
                         ui.Button("Setup UR5e Action Graph", width=200, height=35, clicked_fn=lambda: asyncio.ensure_future(self.setup_action_graph()))
 
@@ -115,6 +121,94 @@ class DigitalTwin(omni.ext.IExt):
         await world.initialize_simulation_context_async()
         world.scene.add_default_ground_plane()
         print("Scene loaded successfully.")
+
+    def refresh_graphs(self):
+        """Delete /World/Graphs folder and automatically recreate all graphs"""
+        import omni.usd
+        from pxr import Usd, Sdf
+        import asyncio
+        
+        print("Refreshing graphs...")
+        
+        # Get the current stage
+        stage = omni.usd.get_context().get_stage()
+        if not stage:
+            print("Error: No stage found")
+            return
+        
+        # Delete the entire /World/Graphs folder if it exists
+        graphs_path = "/World/Graphs"
+        graphs_prim = stage.GetPrimAtPath(graphs_path)
+        if graphs_prim.IsValid():
+            stage.RemovePrim(graphs_path)
+            print(f"Deleted existing {graphs_path} folder")
+        
+        # Recreate the Graphs folder
+        UsdGeom.Xform.Define(stage, graphs_path)
+        print(f"Created new {graphs_path} folder")
+        
+        # Automatically recreate all graphs
+        print("Automatically recreating all graphs...")
+        
+        # Create UR5e Action Graph
+        try:
+            asyncio.ensure_future(self.setup_action_graph())
+            print("✓ UR5e Action Graph recreated")
+        except Exception as e:
+            print(f"✗ Failed to recreate UR5e Action Graph: {e}")
+        
+        # Create Gripper Action Graph
+        try:
+            self.setup_gripper_action_graph()
+            print("✓ Gripper Action Graph recreated")
+        except Exception as e:
+            print(f"✗ Failed to recreate Gripper Action Graph: {e}")
+        
+        # Create Camera Action Graph
+        try:
+            self.setup_camera_action_graph()
+            print("✓ Camera Action Graph recreated")
+        except Exception as e:
+            print(f"✗ Failed to recreate Camera Action Graph: {e}")
+        
+        # Create Additional Camera Action Graphs (if cameras exist)
+        try:
+            # Check if additional cameras exist and recreate their graphs
+            stage = omni.usd.get_context().get_stage()
+            exocentric_camera = stage.GetPrimAtPath("/World/exocentric_camera")
+            custom_camera = stage.GetPrimAtPath("/World/custom_camera")
+            
+            if exocentric_camera.IsValid():
+                self._create_camera_actiongraph(
+                    "/World/exocentric_camera", 
+                    640, 480, 
+                    "exocentric_camera", 
+                    "ExocentricCamera"
+                )
+                print("✓ Exocentric Camera Action Graph recreated")
+            
+            if custom_camera.IsValid():
+                self._create_camera_actiongraph(
+                    "/World/custom_camera", 
+                    640, 480, 
+                    "custom_camera", 
+                    "CustomCamera"
+                )
+                print("✓ Custom Camera Action Graph recreated")
+        except Exception as e:
+            print(f"✗ Failed to recreate Additional Camera Action Graphs: {e}")
+        
+        # Create Pose Publisher Action Graph (if objects exist)
+        try:
+            # Check if objects exist in /World/Objects
+            objects_prim = stage.GetPrimAtPath("/World/Objects")
+            if objects_prim.IsValid() and objects_prim.GetChildren():
+                self.create_pose_publisher()
+                print("✓ Pose Publisher Action Graph recreated")
+        except Exception as e:
+            print(f"✗ Failed to recreate Pose Publisher Action Graph: {e}")
+        
+        print("Graph refresh completed!")
 
 
 
@@ -919,7 +1013,7 @@ def cleanup(db):
                 topic_name: ROS2 topic name
             """
             
-            graph_path = "/World/ActionGraph"
+            graph_path = "/World/Graphs/ActionGraph_objects_poses"
             
             # Create the action graph using OmniGraph API
             keys = og.Controller.Keys
