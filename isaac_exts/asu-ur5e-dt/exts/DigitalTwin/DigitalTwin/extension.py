@@ -67,6 +67,7 @@ class DigitalTwin(omni.ext.IExt):
                     
                     with ui.HStack(spacing=5):
                         ui.Button("Setup Gripper Action Graph", width=200, height=35, clicked_fn=self.setup_gripper_action_graph)
+                        ui.Button("Setup Force Publish Graph", width=200, height=35, clicked_fn=self.setup_force_publish_action_graph)
 
             # Intel RealSense Camera
             with ui.CollapsableFrame(title="Intel RealSense Camera", collapsed=False, height=0):
@@ -163,6 +164,13 @@ class DigitalTwin(omni.ext.IExt):
             print("✓ Gripper Action Graph recreated")
         except Exception as e:
             print(f"✗ Failed to recreate Gripper Action Graph: {e}")
+        
+        # Create Force Publish Action Graph
+        try:
+            self.setup_force_publish_action_graph()
+            print("✓ Force Publish Action Graph recreated")
+        except Exception as e:
+            print(f"✗ Failed to recreate Force Publish Action Graph: {e}")
         
         # Create Camera Action Graph
         try:
@@ -506,6 +514,127 @@ def cleanup(db):
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
+
+    def setup_force_publish_action_graph(self):
+        """Setup force publish action graph for ROS2 publishing gripper forces"""
+        print("Setting up Force Publish Action Graph...")
+        
+        # Create the action graph
+        graph_path = "/World/Graphs/ActionGraph_RG2_ForcePublish"
+        keys = og.Controller.Keys
+
+        # Delete existing graph if it exists
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            stage.RemovePrim(graph_path)
+
+        # Create nodes with initial values
+        (graph, nodes, _, _) = og.Controller.edit(
+            {"graph_path": graph_path, "evaluator_name": "execution"},
+            {
+                keys.CREATE_NODES: [
+                    (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
+                    (f"{graph_path}/context", "isaacsim.ros2.bridge.ROS2Context"),
+                    (f"{graph_path}/script", "omni.graph.scriptnode.ScriptNode"),
+                    (f"{graph_path}/publisher", "isaacsim.ros2.bridge.ROS2Publisher")
+                ],
+                keys.SET_VALUES: [
+                    (f"{graph_path}/script.inputs:usePath", False),
+                    (f"{graph_path}/publisher.inputs:messageName", "Float64"),
+                    (f"{graph_path}/publisher.inputs:messagePackage", "std_msgs"),
+                    (f"{graph_path}/publisher.inputs:topicName", "gripper_force"),
+                ],
+                keys.CONNECT: [
+                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/script.inputs:execIn"),
+                    (f"{graph_path}/script.outputs:execOut", f"{graph_path}/publisher.inputs:execIn"),
+                    (f"{graph_path}/context.outputs:context", f"{graph_path}/publisher.inputs:context"),
+                ]
+            }
+        )
+
+        # Script content
+        script_content = '''from omni.isaac.core.articulations import ArticulationView
+import numpy as np
+import omni.timeline
+
+_gripper_view = None
+
+def setup(db):
+    global _gripper_view
+    try:
+        _gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_force")
+        _gripper_view.initialize()
+        db.log_info("[FORCE] Force publisher initialized")
+        print("[FORCE] Publisher ready")
+    except Exception as e:
+        db.log_error(f"[FORCE] Setup failed: {e}")
+        print(f"[FORCE ERROR] {e}")
+
+def compute(db):
+    global _gripper_view
+    
+    try:
+        if _gripper_view is None:
+            db.outputs.max_force = 0.0
+            return
+        
+        timeline = omni.timeline.get_timeline_interface()
+        if timeline.is_stopped():
+            db.outputs.max_force = 0.0
+            return
+        
+        try:
+            forces = _gripper_view.get_measured_joint_forces()
+            
+            if forces is not None:
+                forces_flat = np.asarray(forces).flatten()
+                if len(forces_flat) > 0:
+                    max_force = float(np.max(np.abs(forces_flat)))
+                    db.outputs.max_force = max_force
+                else:
+                    db.outputs.max_force = 0.0
+            else:
+                db.outputs.max_force = 0.0
+        
+        except Exception as e:
+            db.outputs.max_force = 0.0
+    
+    except Exception as e:
+        db.outputs.max_force = 0.0
+
+def cleanup(db):
+    global _gripper_view
+    try:
+        _gripper_view = None
+    except:
+        pass'''
+
+        # Set script FIRST
+        og.Controller.set(og.Controller.attribute(f"{graph_path}/script.inputs:script"), script_content)
+
+        # Now create output attribute on script node using OmniGraph API
+        script_node = og.Controller.node(f"{graph_path}/script")
+        og.Controller.create_attribute(
+            script_node, 
+            "max_force", 
+            og.Type(og.BaseDataType.DOUBLE),
+            attr_port=og.AttributePortType.ATTRIBUTE_PORT_TYPE_OUTPUT
+        )
+
+        print("Created outputs:max_force attribute on script node")
+
+        # Create input attribute on publisher and connect it using OmniGraph API
+        publisher_prim = stage.GetPrimAtPath(f"{graph_path}/publisher")
+        data_attr = publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+
+        # Connect script output to publisher input using OmniGraph API
+        og.Controller.connect(
+            f"{graph_path}/script.outputs:max_force",
+            f"{graph_path}/publisher.inputs:data"
+        )
+
+        print(f"RG2 Force Publish action graph created at {graph_path}")
+        print("Publishing to topic: /gripper_force")
 
     def import_rg2_gripper(self):
         from omni.isaac.core.utils.stage import add_reference_to_stage
