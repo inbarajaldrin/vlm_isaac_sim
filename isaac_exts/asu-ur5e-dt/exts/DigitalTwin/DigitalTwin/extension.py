@@ -336,7 +336,7 @@ class DigitalTwin(omni.ext.IExt):
         keys = og.Controller.Keys
         
         print("Creating nodes...")
-        # Create only the essential nodes
+        # Create nodes including the new publisher and script_node
         (graph, nodes, _, _) = og.Controller.edit(
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
@@ -344,16 +344,28 @@ class DigitalTwin(omni.ext.IExt):
                     (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
                     (f"{graph_path}/context", "isaacsim.ros2.bridge.ROS2Context"),
                     (f"{graph_path}/subscriber", "isaacsim.ros2.bridge.ROS2Subscriber"),
-                    (f"{graph_path}/script", "omni.graph.scriptnode.ScriptNode")
+                    (f"{graph_path}/script", "omni.graph.scriptnode.ScriptNode"),
+                    (f"{graph_path}/script_node", "omni.graph.scriptnode.ScriptNode"),
+                    (f"{graph_path}/ros2_publisher", "isaacsim.ros2.bridge.ROS2Publisher")
                 ]
             }
         )
         
         print("Adding script attributes...")
-        # Add script attributes
+        # Add script attributes for command script
         script_node = og.Controller.node(f"{graph_path}/script")
         og.Controller.create_attribute(script_node, "inputs:String", og.Type(og.BaseDataType.TOKEN))
         og.Controller.create_attribute(script_node, "outputs:Integer", og.Type(og.BaseDataType.INT))
+        
+        # Add script_node attributes for reading gripper state - use proper pattern
+        script_node_state = og.Controller.node(f"{graph_path}/script_node")
+        og.Controller.create_attribute(
+            script_node_state, 
+            "gripper_width", 
+            og.Type(og.BaseDataType.DOUBLE),
+            attr_port=og.AttributePortType.ATTRIBUTE_PORT_TYPE_OUTPUT
+        )
+        print("Created outputs:gripper_width attribute on script_node")
         
         print("Setting values...")
         # Set values with try/catch for each one
@@ -489,13 +501,127 @@ def cleanup(db):
         
         safe_set(f"{graph_path}/script.inputs:script", script_content, "Python script")
         
+        # Configure script_node for reading gripper state
+        script_node_content = '''from omni.isaac.core.articulations import ArticulationView
+import numpy as np
+import omni.timeline
+
+gripper_view = None
+last_sim_frame = -1
+physics_ready = False
+
+def setup(db):
+    global gripper_view, physics_ready
+    physics_ready = False
+    try:
+        gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
+        gripper_view.initialize()
+        db.log_info("Gripper initialized successfully")
+    except Exception as e:
+        db.log_error(f"Gripper setup failed: {e}")
+        gripper_view = None
+
+def compute(db):
+    global gripper_view, last_sim_frame, physics_ready
+    
+    try:
+        timeline = omni.timeline.get_timeline_interface()
+        if timeline.is_stopped():
+            return
+        
+        current_frame = timeline.get_current_time() * timeline.get_time_codes_per_seconds()
+        
+        # Handle simulation restart
+        if current_frame < last_sim_frame or last_sim_frame == -1:
+            physics_ready = False
+            try:
+                gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper")
+                gripper_view.initialize()
+            except Exception as e:
+                db.log_error(f"Gripper reinitialization failed: {e}")
+                gripper_view = None
+        
+        last_sim_frame = current_frame
+        
+        if gripper_view is None:
+            db.outputs.gripper_width = 0.0
+            return
+        
+        # Read actual gripper state every frame
+        actual_width_mm = 0.0
+        
+        try:
+            joint_positions = gripper_view.get_joint_positions()
+            
+            if joint_positions is not None and len(joint_positions) > 0 and joint_positions.shape[1] >= 2:
+                physics_ready = True
+                
+                # Get actual angle
+                actual_angle = np.mean(joint_positions[0, :2])
+                
+                # Convert to width
+                actual_ratio = (actual_angle + np.pi/4) / (np.pi/4 + np.pi/6)
+                actual_width_mm = actual_ratio * 110.0
+                actual_width_mm = np.clip(actual_width_mm, 0.0, 110.0)
+                
+        except Exception as e:
+            pass  # Ignore during initialization
+        
+        # Always output actual width
+        db.outputs.gripper_width = float(actual_width_mm)
+        
+    except Exception as e:
+        db.log_error(f"Compute error: {e}")
+        db.outputs.gripper_width = 0.0
+
+def cleanup(db):
+    global gripper_view, physics_ready
+    gripper_view = None
+    physics_ready = False'''
+        
+        safe_set(f"{graph_path}/script_node.inputs:usePath", False, "Use inline script for script_node")
+        safe_set(f"{graph_path}/script_node.inputs:script", script_node_content, "Python script for script_node")
+        
+        # Configure ROS2 Publisher
+        safe_set(f"{graph_path}/ros2_publisher.inputs:messageName", "Float64", "ROS2 message type")
+        safe_set(f"{graph_path}/ros2_publisher.inputs:messagePackage", "std_msgs", "ROS2 package")
+        safe_set(f"{graph_path}/ros2_publisher.inputs:topicName", "gripper_width_sim", "ROS2 topic")
+        
+        # Create input attribute on publisher and connect it using OmniGraph API
+        try:
+            stage = omni.usd.get_context().get_stage()
+            publisher_prim = stage.GetPrimAtPath(f"{graph_path}/ros2_publisher")
+            if publisher_prim.IsValid():
+                # Check if attribute already exists
+                existing_attr = publisher_prim.GetAttribute("inputs:data")
+                if not existing_attr.IsValid():
+                    data_attr = publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+                    print("Created inputs:data attribute on ros2_publisher")
+                else:
+                    print("inputs:data attribute already exists on ros2_publisher")
+                
+                # Connect script_node output to publisher input using OmniGraph API
+                og.Controller.connect(
+                    f"{graph_path}/script_node.outputs:gripper_width",
+                    f"{graph_path}/ros2_publisher.inputs:data"
+                )
+                print("Connected script_node.outputs:gripper_width to ros2_publisher.inputs:data")
+            else:
+                print(f"Warning: Could not find publisher prim at {graph_path}/ros2_publisher")
+        except Exception as e:
+            print(f"Error creating publisher connection: {e}")
+        
         print("Creating connections...")
-        # Simple connections - direct from ROS2 to script
+        # Connections for command handling (subscriber -> script)
         connections = [
             (f"{graph_path}/tick.outputs:tick", f"{graph_path}/subscriber.inputs:execIn", "Tick to subscriber"),
             (f"{graph_path}/context.outputs:context", f"{graph_path}/subscriber.inputs:context", "Context to subscriber"),
             (f"{graph_path}/subscriber.outputs:data", f"{graph_path}/script.inputs:String", "ROS2 data to script"),
-            (f"{graph_path}/subscriber.outputs:execOut", f"{graph_path}/script.inputs:execIn", "ROS2 exec to script")
+            (f"{graph_path}/subscriber.outputs:execOut", f"{graph_path}/script.inputs:execIn", "ROS2 exec to script"),
+            # Connections for state reading and publishing (script_node -> publisher)
+            (f"{graph_path}/tick.outputs:tick", f"{graph_path}/script_node.inputs:execIn", "Tick to script_node"),
+            (f"{graph_path}/script_node.outputs:execOut", f"{graph_path}/ros2_publisher.inputs:execIn", "Script_node exec to publisher"),
+            (f"{graph_path}/context.outputs:context", f"{graph_path}/ros2_publisher.inputs:context", "Context to publisher")
         ]
         
         success_count = 0
@@ -507,13 +633,15 @@ def cleanup(db):
             except Exception as e:
                 print(f"Failed {desc}: {e}")
         
-        print(f"Graph created with {success_count}/4 connections!")
+        print(f"Graph created with {success_count}/7 connections (plus gripper_width connection)!")
         print("Location: /World/Graphs/ActionGraph_RG2")
-        print("Test commands:")
+        print("\nTest commands for gripper control:")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"open\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"close\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"1100\"'")
         print("ros2 topic pub /gripper_command std_msgs/String 'data: \"550\"'")
+        print("\nMonitor gripper width:")
+        print("ros2 topic echo /gripper_width_sim")
 
     def setup_force_publish_action_graph(self):
         """Setup force publish action graph for ROS2 publishing gripper forces"""
