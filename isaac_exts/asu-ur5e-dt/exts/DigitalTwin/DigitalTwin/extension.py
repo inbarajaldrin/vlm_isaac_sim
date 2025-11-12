@@ -189,7 +189,7 @@ class DigitalTwin(omni.ext.IExt):
             if exocentric_camera.IsValid():
                 self._create_camera_actiongraph(
                     "/World/exocentric_camera", 
-                    640, 480, 
+                    1280, 720, 
                     "exocentric_camera", 
                     "ExocentricCamera"
                 )
@@ -996,14 +996,14 @@ def cleanup(db):
 
         if is_exocentric:
             prim_path = "/World/exocentric_camera"
-            position = (2.3, 3.2, 1.3)
-            quat_xyzw = (0.19434, 0.57219, 0.75443, 0.25624)  # x, y, z, w
+            position = (1.5, -1.5, 0.85)
+            quat_xyzw = (0.52787, 0.24907, 0.32102, 0.74583)  # x, y, z, w
 
             camera = Camera(
                 prim_path=prim_path,
                 position=np.array(position),  # Temporary, actual pose set below
                 frequency=30,
-                resolution=(640, 480),
+                resolution=(1280, 720),
             )
             camera.initialize()
             set_camera_pose(prim_path, position, quat_xyzw)
@@ -1032,9 +1032,10 @@ def cleanup(db):
         is_custom = self._custom_checkbox.model.get_value_as_bool()
 
         if is_exocentric:
+            # TODO: Copy other camera properties into exocentric camera (e.g., from Intel camera setup)
             self._create_camera_actiongraph(
                 "/World/exocentric_camera", 
-                640, 480, 
+                1280, 720, 
                 "exocentric_camera", 
                 "ExocentricCamera"
             )
