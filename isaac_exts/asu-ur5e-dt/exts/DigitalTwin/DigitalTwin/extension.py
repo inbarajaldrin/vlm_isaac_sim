@@ -137,8 +137,40 @@ class DigitalTwin(omni.ext.IExt):
             print("Error: No stage found")
             return
         
-        # Delete the entire /World/Graphs folder if it exists
+        # Check which graphs exist BEFORE deleting the Graphs folder
         graphs_path = "/World/Graphs"
+        graph_paths_to_recreate = []
+        
+        # Check for each graph's existence
+        ur5e_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_UR5e")
+        if ur5e_graph.IsValid():
+            graph_paths_to_recreate.append("UR5e")
+        
+        gripper_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_RG2")
+        if gripper_graph.IsValid():
+            graph_paths_to_recreate.append("RG2")
+        
+        force_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_RG2_ForcePublish")
+        if force_graph.IsValid():
+            graph_paths_to_recreate.append("RG2_ForcePublish")
+        
+        camera_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_Camera")
+        if camera_graph.IsValid():
+            graph_paths_to_recreate.append("Camera")
+        
+        exocentric_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_ExocentricCamera")
+        if exocentric_graph.IsValid():
+            graph_paths_to_recreate.append("ExocentricCamera")
+        
+        custom_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_CustomCamera")
+        if custom_graph.IsValid():
+            graph_paths_to_recreate.append("CustomCamera")
+        
+        objects_poses_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_objects_poses")
+        if objects_poses_graph.IsValid():
+            graph_paths_to_recreate.append("objects_poses")
+        
+        # Delete the entire /World/Graphs folder if it exists
         graphs_prim = stage.GetPrimAtPath(graphs_path)
         if graphs_prim.IsValid():
             stage.RemovePrim(graphs_path)
@@ -148,73 +180,75 @@ class DigitalTwin(omni.ext.IExt):
         UsdGeom.Xform.Define(stage, graphs_path)
         print(f"Created new {graphs_path} folder")
         
-        # Automatically recreate all graphs
-        print("Automatically recreating all graphs...")
+        # Automatically recreate only graphs that existed
+        print(f"Recreating {len(graph_paths_to_recreate)} existing graphs...")
         
         # Create UR5e Action Graph
-        try:
-            asyncio.ensure_future(self.setup_action_graph())
-            print("✓ UR5e Action Graph recreated")
-        except Exception as e:
-            print(f"✗ Failed to recreate UR5e Action Graph: {e}")
+        if "UR5e" in graph_paths_to_recreate:
+            try:
+                asyncio.ensure_future(self.setup_action_graph())
+                print("✓ UR5e Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate UR5e Action Graph: {e}")
         
         # Create Gripper Action Graph
-        try:
-            self.setup_gripper_action_graph()
-            print("✓ Gripper Action Graph recreated")
-        except Exception as e:
-            print(f"✗ Failed to recreate Gripper Action Graph: {e}")
+        if "RG2" in graph_paths_to_recreate:
+            try:
+                self.setup_gripper_action_graph()
+                print("✓ Gripper Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Gripper Action Graph: {e}")
         
         # Create Force Publish Action Graph
-        try:
-            self.setup_force_publish_action_graph()
-            print("✓ Force Publish Action Graph recreated")
-        except Exception as e:
-            print(f"✗ Failed to recreate Force Publish Action Graph: {e}")
+        if "RG2_ForcePublish" in graph_paths_to_recreate:
+            try:
+                self.setup_force_publish_action_graph()
+                print("✓ Force Publish Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Force Publish Action Graph: {e}")
         
         # Create Camera Action Graph
-        try:
-            self.setup_camera_action_graph()
-            print("✓ Camera Action Graph recreated")
-        except Exception as e:
-            print(f"✗ Failed to recreate Camera Action Graph: {e}")
+        if "Camera" in graph_paths_to_recreate:
+            try:
+                self.setup_camera_action_graph()
+                print("✓ Camera Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Camera Action Graph: {e}")
         
-        # Create Additional Camera Action Graphs (if cameras exist)
-        try:
-            # Check if additional cameras exist and recreate their graphs
-            stage = omni.usd.get_context().get_stage()
-            exocentric_camera = stage.GetPrimAtPath("/World/exocentric_camera")
-            custom_camera = stage.GetPrimAtPath("/World/custom_camera")
-            
-            if exocentric_camera.IsValid():
-                self._create_camera_actiongraph(
-                    "/World/exocentric_camera", 
-                    1280, 720, 
-                    "exocentric_camera", 
-                    "ExocentricCamera"
-                )
-                print("✓ Exocentric Camera Action Graph recreated")
-            
-            if custom_camera.IsValid():
-                self._create_camera_actiongraph(
-                    "/World/custom_camera", 
-                    640, 480, 
-                    "custom_camera", 
-                    "CustomCamera"
-                )
-                print("✓ Custom Camera Action Graph recreated")
-        except Exception as e:
-            print(f"✗ Failed to recreate Additional Camera Action Graphs: {e}")
+        # Create Additional Camera Action Graphs (only if graphs existed)
+        if "ExocentricCamera" in graph_paths_to_recreate or "CustomCamera" in graph_paths_to_recreate:
+            try:
+                stage = omni.usd.get_context().get_stage()
+                
+                if "ExocentricCamera" in graph_paths_to_recreate:
+                    # Get camera prim path from the graph's render product node if possible
+                    # For now, use default path
+                    self._create_camera_actiongraph(
+                        "/World/exocentric_camera", 
+                        1280, 720, 
+                        "exocentric_camera", 
+                        "ExocentricCamera"
+                    )
+                    print("✓ Exocentric Camera Action Graph recreated")
+                
+                if "CustomCamera" in graph_paths_to_recreate:
+                    self._create_camera_actiongraph(
+                        "/World/custom_camera", 
+                        640, 480, 
+                        "custom_camera", 
+                        "CustomCamera"
+                    )
+                    print("✓ Custom Camera Action Graph recreated")
+            except Exception as e:
+                print(f"✗ Failed to recreate Additional Camera Action Graphs: {e}")
         
-        # Create Pose Publisher Action Graph (if objects exist)
-        try:
-            # Check if objects exist in /World/Objects
-            objects_prim = stage.GetPrimAtPath("/World/Objects")
-            if objects_prim.IsValid() and objects_prim.GetChildren():
+        # Create Pose Publisher Action Graph (only if graph existed)
+        if "objects_poses" in graph_paths_to_recreate:
+            try:
                 self.create_pose_publisher()
                 print("✓ Pose Publisher Action Graph recreated")
-        except Exception as e:
-            print(f"✗ Failed to recreate Pose Publisher Action Graph: {e}")
+            except Exception as e:
+                print(f"✗ Failed to recreate Pose Publisher Action Graph: {e}")
         
         print("Graph refresh completed!")
 
@@ -972,8 +1006,6 @@ def cleanup(db):
 
     def create_additional_camera(self):
         """Create additional camera based on selected view type"""
-        import omni.isaac.core.utils.numpy.rotations as rot_utils
-        from omni.isaac.sensor import Camera
         import omni.usd
         from pxr import Gf, UsdGeom
         import numpy as np
@@ -990,40 +1022,74 @@ def cleanup(db):
             quat = Gf.Quatd(quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2])
             xform.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
 
+        def configure_camera_properties(camera_prim, width, height):
+            """Configure camera properties based on resolution"""
+            # Calculate focal length and aperture based on resolution
+            # Using standard 35mm film equivalent calculations
+            # Horizontal aperture in mm (standard 35mm film is 36mm wide)
+            horizontal_aperture_mm = 36.0
+            # Vertical aperture calculated from aspect ratio
+            aspect_ratio = height / width
+            vertical_aperture_mm = horizontal_aperture_mm * aspect_ratio
+            
+            # Focal length (50mm is a standard "normal" lens)
+            focal_length_mm = 50.0
+            
+            # Convert mm to USD units (USD uses cm, but aperture is in mm in USD)
+            camera = UsdGeom.Camera(camera_prim)
+            camera.CreateHorizontalApertureAttr().Set(horizontal_aperture_mm)
+            camera.CreateVerticalApertureAttr().Set(vertical_aperture_mm)
+            camera.CreateFocalLengthAttr().Set(focal_length_mm)
+            camera.CreateProjectionAttr().Set("perspective")
+            camera.CreateClippingRangeAttr().Set(Gf.Vec2f(0.1, 10000.0))
+
         # Check which camera type is selected
         is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
         is_custom = self._custom_checkbox.model.get_value_as_bool()
+
+        stage = omni.usd.get_context().get_stage()
+        if not stage:
+            print("Error: No stage found")
+            return
 
         if is_exocentric:
             prim_path = "/World/exocentric_camera"
             position = (1.5, -1.5, 0.85)
             quat_xyzw = (0.52787, 0.24907, 0.32102, 0.74583)  # x, y, z, w
+            resolution = (1280, 720)
 
-            camera = Camera(
-                prim_path=prim_path,
-                position=np.array(position),  # Temporary, actual pose set below
-                frequency=30,
-                resolution=(1280, 720),
-            )
-            camera.initialize()
+            # Create camera prim using UsdGeom.Camera
+            camera_prim = UsdGeom.Camera.Define(stage, prim_path)
+            if not camera_prim:
+                print(f"Error: Failed to create camera at {prim_path}")
+                return
+            
+            # Configure camera properties
+            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
+            
+            # Set camera pose
             set_camera_pose(prim_path, position, quat_xyzw)
-            print("Exocentric camera created at /World/exocentric_camera")
+            print(f"Exocentric camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
 
         if is_custom:
             prim_path = "/World/custom_camera"
             position = (0.0, 4.0, 0.5)
             quat_xyzw = (0.0, 0.67559, 0.73728, 0.0)  # x, y, z, w
+            resolution = (640, 480)
 
-            camera = Camera(
-                prim_path=prim_path,
-                position=np.array(position),  # Temp pose
-                frequency=30,
-                resolution=(640, 480),
-            )
-            camera.initialize()
-            camera.add_motion_vectors_to_frame()
+            # Create camera prim using UsdGeom.Camera
+            camera_prim = UsdGeom.Camera.Define(stage, prim_path)
+            if not camera_prim:
+                print(f"Error: Failed to create camera at {prim_path}")
+                return
+            
+            # Configure camera properties
+            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
+            
+            # Set camera pose
             set_camera_pose(prim_path, position, quat_xyzw)
-            print("Custom camera created at /World/custom_camera")
+            print(f"Custom camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
+            # Note: Motion vectors would need to be added via render settings or post-processing
 
     def create_additional_camera_actiongraph(self):
         """Create ActionGraph for additional camera ROS2 publishing"""
