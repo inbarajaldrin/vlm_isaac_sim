@@ -95,12 +95,28 @@ class DigitalTwin(omni.ext.IExt):
                     with ui.VStack(spacing=5):
                         with ui.HStack(spacing=5):
                             self._exocentric_checkbox = ui.CheckBox(width=20)
-                            self._exocentric_checkbox.model.set_value(True)  # Default checked
+                            self._exocentric_checkbox.model.set_value(False)  # Default unchecked
                             ui.Label("Exocentric View", alignment=ui.Alignment.LEFT, width=120)
 
                         with ui.HStack(spacing=5):
                             self._custom_checkbox = ui.CheckBox(width=20)
                             ui.Label("Close Up View", alignment=ui.Alignment.LEFT, width=120)
+
+                        with ui.HStack(spacing=5):
+                            self._custom_prim_checkbox = ui.CheckBox(width=20)
+                            ui.Label("Custom Camera Prim", alignment=ui.Alignment.LEFT, width=120)
+
+                    # Custom camera prim path input
+                    with ui.HStack(spacing=5):
+                        ui.Label("Camera Prim Path:", alignment=ui.Alignment.LEFT, width=120)
+                        self._custom_camera_prim_field = ui.StringField(width=200)
+                        self._custom_camera_prim_field.model.set_value("/World/custom_camera")
+                    
+                    # Custom camera ROS2 topic name input
+                    with ui.HStack(spacing=5):
+                        ui.Label("ROS2 Topic Name:", alignment=ui.Alignment.LEFT, width=120)
+                        self._custom_camera_topic_field = ui.StringField(width=200)
+                        self._custom_camera_topic_field.model.set_value("custom_camera")
 
                     # Camera control buttons
                     with ui.HStack(spacing=5):
@@ -1052,6 +1068,7 @@ def cleanup(db):
         # Check which camera type is selected
         is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
         is_custom = self._custom_checkbox.model.get_value_as_bool()
+        is_custom_prim = self._custom_prim_checkbox.model.get_value_as_bool()
 
         stage = omni.usd.get_context().get_stage()
         if not stage:
@@ -1097,11 +1114,44 @@ def cleanup(db):
             print(f"Custom camera created at {prim_path} with resolution {resolution[0]}x{resolution[1]}")
             # Note: Motion vectors would need to be added via render settings or post-processing
 
+        if is_custom_prim:
+            # Get custom prim path from text field
+            custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
+            if not custom_prim_path or custom_prim_path.strip() == "":
+                print("Error: Please enter a valid camera prim path")
+                return
+            
+            # Check if the prim already exists
+            existing_prim = stage.GetPrimAtPath(custom_prim_path)
+            if existing_prim and existing_prim.IsValid():
+                print(f"Camera prim already exists at {custom_prim_path}. Using existing prim.")
+                camera_prim = UsdGeom.Camera(existing_prim)
+                if not camera_prim:
+                    # If it exists but is not a camera, convert it
+                    print(f"Prim at {custom_prim_path} exists but is not a camera. Creating camera...")
+                    camera_prim = UsdGeom.Camera.Define(stage, custom_prim_path)
+            else:
+                # Create new camera prim at the specified path
+                camera_prim = UsdGeom.Camera.Define(stage, custom_prim_path)
+                if not camera_prim:
+                    print(f"Error: Failed to create camera at {custom_prim_path}")
+                    return
+            
+            # Default resolution for custom camera
+            resolution = (1280, 720)
+            
+            # Configure camera properties
+            configure_camera_properties(camera_prim.GetPrim(), resolution[0], resolution[1])
+            
+            # Note: Pose is not set for custom prim - user should position it manually or it uses existing pose
+            print(f"Custom camera created/updated at {custom_prim_path} with resolution {resolution[0]}x{resolution[1]}")
+
     def create_additional_camera_actiongraph(self):
         """Create ActionGraph for additional camera ROS2 publishing"""
         # Check which cameras exist and create action graphs accordingly
         is_exocentric = self._exocentric_checkbox.model.get_value_as_bool()
         is_custom = self._custom_checkbox.model.get_value_as_bool()
+        is_custom_prim = self._custom_prim_checkbox.model.get_value_as_bool()
 
         if is_exocentric:
             # TODO: Copy other camera properties into exocentric camera (e.g., from Intel camera setup)
@@ -1118,6 +1168,33 @@ def cleanup(db):
                 640, 480, 
                 "custom_camera", 
                 "CustomCamera"
+            )
+
+        if is_custom_prim:
+            # Get custom prim path from text field
+            custom_prim_path = self._custom_camera_prim_field.model.get_value_as_string()
+            if not custom_prim_path or custom_prim_path.strip() == "":
+                print("Error: Please enter a valid camera prim path")
+                return
+            
+            # Get ROS2 topic name from text field, or generate from prim path if empty
+            topic_name = self._custom_camera_topic_field.model.get_value_as_string()
+            if not topic_name or topic_name.strip() == "":
+                # Extract a clean name for the topic from the prim path if topic is empty
+                prim_name = custom_prim_path.split("/")[-1] if "/" in custom_prim_path else custom_prim_path
+                topic_name = prim_name.lower().replace(" ", "_").replace("-", "_")
+                print(f"Topic name not specified, using generated name: {topic_name}")
+            
+            # Use topic name for graph suffix (sanitize for graph name - remove special chars, capitalize)
+            # Convert topic name to a valid graph suffix: remove underscores, capitalize words
+            graph_suffix = topic_name.replace("_", " ").replace("-", " ").title().replace(" ", "")
+            
+            # Default resolution for custom camera
+            self._create_camera_actiongraph(
+                custom_prim_path, 
+                1280, 720, 
+                topic_name, 
+                graph_suffix
             )
 
     def _create_camera_actiongraph(self, camera_prim, width, height, topic, graph_suffix):
