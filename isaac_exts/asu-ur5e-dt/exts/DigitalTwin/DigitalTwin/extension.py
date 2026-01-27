@@ -1283,10 +1283,11 @@ def cleanup(db):
         z_values=None,
         fixed_positions=None,
         max_attempts=10_000,
+        max_retries=100,
     ):
         """
         Sample non-overlapping object poses in world frame.
-        
+
         Args:
             num_objects: Number of objects to place
             x_range: X position range in world frame (default: -0.5 to 0.5)
@@ -1295,9 +1296,9 @@ def cleanup(db):
             yaw_range: Yaw rotation range in degrees
             z_values: List of Z values for each object (preserves current Z)
             fixed_positions: List of fixed positions (e.g., base objects) to avoid
-            max_attempts: Maximum placement attempts
+            max_attempts: Maximum placement attempts per retry
+            max_retries: Maximum number of times to restart the entire placement
         """
-        poses, attempts = [], 0
         # Convert fixed positions to numpy arrays for distance checking
         fixed_xy = []
         if fixed_positions:
@@ -1306,34 +1307,41 @@ def cleanup(db):
                     fixed_xy.append(np.array(pos[:2]))  # Only X, Y
                 elif hasattr(pos, '__getitem__'):
                     fixed_xy.append(np.array([pos[0], pos[1]]))
-        
-        while len(poses) < num_objects and attempts < max_attempts:
-            attempts += 1
-            candidate_xy = np.array([
-                np.random.uniform(*x_range),
-                np.random.uniform(*y_range)
-            ])
-            # Check separation against both existing poses AND fixed positions
-            valid = True
-            # Check against existing randomized poses
-            if any(np.linalg.norm(candidate_xy - p["position"][:2]) < min_sep for p in poses):
-                valid = False
-            # Check against fixed positions (base objects)
-            if valid and fixed_xy:
-                if any(np.linalg.norm(candidate_xy - fixed) < min_sep for fixed in fixed_xy):
+
+        for retry in range(max_retries):
+            poses, attempts = [], 0
+
+            while len(poses) < num_objects and attempts < max_attempts:
+                attempts += 1
+                candidate_xy = np.array([
+                    np.random.uniform(*x_range),
+                    np.random.uniform(*y_range)
+                ])
+                # Check separation against both existing poses AND fixed positions
+                valid = True
+                # Check against existing randomized poses
+                if any(np.linalg.norm(candidate_xy - p["position"][:2]) < min_sep for p in poses):
                     valid = False
-            
-            if valid:
-                yaw_deg = np.random.uniform(*yaw_range)
-                # Use provided Z value or default
-                z = z_values[len(poses)] if z_values and len(poses) < len(z_values) else 0.0495
-                poses.append({
-                    "position": np.array([candidate_xy[0], candidate_xy[1], z]),
-                    "yaw_deg": yaw_deg
-                })
-        if len(poses) < num_objects:
-            raise RuntimeError("Could not place all objects without violating min_sep; reduce density.")
-        return poses
+                # Check against fixed positions (base objects)
+                if valid and fixed_xy:
+                    if any(np.linalg.norm(candidate_xy - fixed) < min_sep for fixed in fixed_xy):
+                        valid = False
+
+                if valid:
+                    yaw_deg = np.random.uniform(*yaw_range)
+                    # Use provided Z value or default
+                    z = z_values[len(poses)] if z_values and len(poses) < len(z_values) else 0.0495
+                    poses.append({
+                        "position": np.array([candidate_xy[0], candidate_xy[1], z]),
+                        "yaw_deg": yaw_deg
+                    })
+
+            if len(poses) == num_objects:
+                if retry > 0:
+                    print(f"Placement succeeded after {retry + 1} retries")
+                return poses
+
+        raise RuntimeError("Could not place all objects without violating min_sep; reduce density.")
 
     def _set_obj_prim_pose(self, prim_path, position, quat_wxyz):
         import omni.kit.commands
