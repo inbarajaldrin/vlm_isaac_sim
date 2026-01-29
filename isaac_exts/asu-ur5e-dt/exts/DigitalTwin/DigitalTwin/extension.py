@@ -6,6 +6,7 @@ import os
 import threading
 import glob
 import omni.client
+import omni.kit.commands
 import math
 import re
 
@@ -18,7 +19,7 @@ from omni.isaac.core.utils.numpy.rotations import euler_angles_to_quats
 from omni.isaac.core.articulations import Articulation
 import omni.graph.core as og
 import omni.usd
-from pxr import UsdGeom, Gf, Sdf, Usd
+from pxr import UsdGeom, Gf, Sdf, Usd, UsdPhysics, UsdShade, PhysxSchema
 from scipy.spatial.transform import Rotation as R
 
 class DigitalTwin(omni.ext.IExt):
@@ -143,6 +144,17 @@ class DigitalTwin(omni.ext.IExt):
         world = World()
         await world.initialize_simulation_context_async()
         world.scene.add_default_ground_plane()
+
+        # Enable GPU dynamics on the physics scene
+        stage = omni.usd.get_context().get_stage()
+        physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
+        if physics_scene_prim and physics_scene_prim.IsValid():
+            physx_scene_api = PhysxSchema.PhysxSceneAPI.Apply(physics_scene_prim)
+            physx_scene_api.CreateEnableGPUDynamicsAttr().Set(True)
+            print("Enabled GPU dynamics on /physicsScene")
+        else:
+            print("Warning: /physicsScene not found")
+
         print("Scene loaded successfully.")
 
     def refresh_graphs(self):
@@ -279,11 +291,20 @@ class DigitalTwin(omni.ext.IExt):
     async def load_ur5e(self):
         asset_path = "omniverse://localhost/Library/ur5e.usd"
         prim_path = "/World/UR5e"
-        
-        # 1. Add the USD asset
+
+        # 1. Ensure World exists - create and initialize if needed (won't clear existing stage)
+        world = World.instance()
+        if world is None:
+            print("World not initialized. Creating simulation context for existing stage...")
+            world = World()
+            await world.initialize_simulation_context_async()
+            # Note: Not adding ground plane here - assumes existing scene has one or user doesn't want it
+            print("Simulation context initialized.")
+
+        # 2. Add the USD asset
         add_reference_to_stage(usd_path=asset_path, prim_path=prim_path)
 
-        # 2. Wait for prim to exist
+        # 3. Wait for prim to exist
         import time
         stage = omni.usd.get_context().get_stage()
         for _ in range(10):
@@ -294,7 +315,7 @@ class DigitalTwin(omni.ext.IExt):
         else:
             raise RuntimeError(f"Failed to load prim at {prim_path}")
 
-        # 3. Apply translation and orientation
+        # 4. Apply translation and orientation
         xform = UsdGeom.Xform(prim)
         xform.ClearXformOpOrder()
 
@@ -310,13 +331,34 @@ class DigitalTwin(omni.ext.IExt):
 
         print(f"Applied translation and rotation to {prim_path}")
 
-        # 4. Setup Articulation
+        # 5. Setup Articulation
         self._ur5e_view = ArticulationView(prim_paths_expr=prim_path, name="ur5e_view")
         World.instance().scene.add(self._ur5e_view)
         await World.instance().reset_async()
         self._timeline.stop()
 
         self._articulation = Articulation(prim_path)
+
+        # Configure joint drives: set maxForce=150 and stiffness=300 for all joints
+        joint_names = [
+            "shoulder_pan_joint",
+            "shoulder_lift_joint",
+            "elbow_joint",
+            "wrist_1_joint",
+            "wrist_2_joint",
+            "wrist_3_joint",
+        ]
+        for joint_name in joint_names:
+            joint_path = f"{prim_path}/joints/{joint_name}"
+            joint_prim = stage.GetPrimAtPath(joint_path)
+            if not joint_prim.IsValid():
+                print(f"Warning: Joint not found at {joint_path}")
+                continue
+            drive_api = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
+            drive_api.GetMaxForceAttr().Set(200.0)
+            drive_api.GetStiffnessAttr().Set(100.0)
+            drive_api.GetDampingAttr().Set(1.0)
+            print(f"Set {joint_name}: maxForce=200, stiffness=100, damping=1")
 
         print("UR5e robot loaded successfully!")
 
@@ -1273,13 +1315,17 @@ def cleanup(db):
         print(f"\n{graph_suffix} ActionGraph created successfully!")
         print(f"Test with: ros2 topic echo /{topic}")
 
+    def _is_base_object(self, name):
+        """Check if an object name matches the base{number} pattern."""
+        return bool(re.match(r'^base\d+$', name))
+
     def _sample_non_overlapping_objects(
         self,
         num_objects,
         x_range=(-0.2, 0.5),
         y_range=(-0.5, -0.3),
         min_sep=0.2,
-        yaw_range=(0.0, 180.0),
+        yaw_range=(-180.0, 180.0),
         z_values=None,
         fixed_positions=None,
         max_attempts=10_000,
@@ -1398,7 +1444,7 @@ def cleanup(db):
             child_world_pos = child_world_transform.ExtractTranslation()
             
             # Check if this is a base object (matches pattern base{id})
-            if re.match(r'^base\d+$', obj):
+            if self._is_base_object(obj):
                 # Store base position for separation checking
                 base_positions.append(child_world_pos)
                 print(f"Skipping {obj} (matches base{{id}} pattern) at world pos: ({child_world_pos[0]:.3f}, {child_world_pos[1]:.3f}, {child_world_pos[2]:.3f})")
@@ -1476,8 +1522,30 @@ def cleanup(db):
             print("Error: No folder path specified")
             return
         
+        # Check if path is a single USD file or a folder
+        if folder_path.endswith(('.usd', '.usda', '.usdc')):
+            # Single file: import it directly
+            print(f"Importing single file: {folder_path}")
+            stage = omni.usd.get_context().get_stage()
+            target_path = "/World/Objects"
+            if not stage.GetPrimAtPath(target_path):
+                UsdGeom.Xform.Define(stage, target_path)
+            base_name = os.path.splitext(os.path.basename(folder_path))[0]
+            prim_path = f"{target_path}/{base_name}"
+            prim = stage.DefinePrim(prim_path)
+            prim.GetReferences().AddReference(folder_path)
+            xform = UsdGeom.Xform(prim)
+            xform.ClearXformOpOrder()
+            xform.AddTranslateOp().Set(Gf.Vec3d(0.0, self._y_offset, self._z_offset))
+            print(f"Added {folder_path} to {prim_path}")
+            return
+
+        # Ensure folder path ends with /
+        if not folder_path.endswith("/"):
+            folder_path += "/"
+
         print(f"Adding objects from folder: {folder_path}")
-        
+
         # Get the current stage and selection
         stage = omni.usd.get_context().get_stage()
         selection = omni.usd.get_context().get_selection()
@@ -1488,7 +1556,6 @@ def cleanup(db):
             target_path = selected_paths[0]
         else:
             target_path = "/World/Objects"
-            from pxr import UsdGeom
             if not stage.GetPrimAtPath(target_path):
                 UsdGeom.Xform.Define(stage, target_path)
 
@@ -1501,7 +1568,16 @@ def cleanup(db):
                          if entry.relative_path.endswith(('.usd', '.usda', '.usdc'))]
             
             print(f"Found {len(usd_files)} USD files")
-            
+
+            # Create physics material inside the objects folder
+            physics_mat_path = f"{target_path}/PhysicsMaterial"
+            material = UsdShade.Material.Define(stage, physics_mat_path)
+            physics_mat_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
+            physics_mat_api.CreateDynamicFrictionAttr().Set(0.5)
+            physics_mat_api.CreateRestitutionAttr().Set(0.1)
+            physics_mat_api.CreateStaticFrictionAttr().Set(0.5)
+            print(f"Created physics material at {physics_mat_path} (dynamicFriction=0.5, restitution=0.1, staticFriction=0.5)")
+
             # Import each USD file with positioning
             for i, usd_file in enumerate(usd_files):
                 usd_file_path = folder_path + usd_file
@@ -1515,23 +1591,15 @@ def cleanup(db):
                 references = prim.GetReferences()
                 references.AddReference(usd_file_path)
                 
-                # Position objects: first at center, then alternating +X and -X
+                # Calculate position: first at center, then alternating +X and -X
                 if i == 0:
-                    # First object at center (0, 0, 0)
                     x_position = 0.0
                 else:
-                    # Calculate position: alternating +X and -X, using configurable spacing
                     if i % 2 == 1:  # Odd indices: +X direction
                         x_position = self._object_spacing * ((i + 1) // 2)
                     else:  # Even indices: -X direction
                         x_position = -self._object_spacing * (i // 2)
-                
-                # Apply position to the parent prim
-                from pxr import UsdGeom, Gf
-                xform = UsdGeom.Xform(prim)
-                xform.ClearXformOpOrder()
-                xform.AddTranslateOp().Set(Gf.Vec3d(x_position, self._y_offset, self._z_offset))
-                
+
                 # Rename Body1 to match the object name
                 def rename_body1_to_object_name(stage, prim_path, object_name):
                     """Recursively search for Body1 and rename it to object_name"""
@@ -1544,7 +1612,6 @@ def cleanup(db):
                         if child.GetName() == "Body1":
                             # Found Body1, rename it
                             new_path = child.GetPath().GetParentPath().AppendChild(object_name)
-                            import omni.kit.commands
                             omni.kit.commands.execute('MovePrim',
                                 path_from=child.GetPath(),
                                 path_to=new_path)
@@ -1557,8 +1624,71 @@ def cleanup(db):
                 
                 # Try to rename Body1 to the object name
                 rename_body1_to_object_name(stage, prim_path, base_name)
-                
-                print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
+
+                # Apply position to the final body prim: {name}/{name}/{name}
+                # Apply position to the final body prim without clearing inherited xform ops
+                body_path = f"{prim_path}/{base_name}/{base_name}"
+                body_prim = stage.GetPrimAtPath(body_path)
+                if body_prim and body_prim.IsValid():
+                    omni.kit.commands.execute('ChangeProperty',
+                        prop_path=f"{body_path}.xformOp:translate",
+                        value=Gf.Vec3d(x_position, self._y_offset, self._z_offset),
+                        prev=None)
+                    print(f"Added {usd_file_path} to {body_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
+                else:
+                    print(f"Warning: Body prim not found at {body_path}, positioning parent instead")
+                    omni.kit.commands.execute('ChangeProperty',
+                        prop_path=f"{prim_path}.xformOp:translate",
+                        value=Gf.Vec3d(x_position, self._y_offset, self._z_offset),
+                        prev=None)
+                    print(f"Added {usd_file_path} to {prim_path} at position ({x_position}, {self._y_offset}, {self._z_offset})")
+
+            # Bind physics material to each object and its descendants
+            from omni.physx.scripts import physicsUtils
+            physics_mat_sdf_path = Sdf.Path(physics_mat_path)
+            objects_prim = stage.GetPrimAtPath(target_path)
+            if objects_prim.IsValid():
+                for child in objects_prim.GetChildren():
+                    child_name = child.GetName()
+                    if child_name == "PhysicsMaterial":
+                        continue
+                    # Walk all descendants and bind material to prims with CollisionAPI
+                    bound_count = 0
+                    for desc in Usd.PrimRange(child):
+                        if desc.HasAPI(UsdPhysics.CollisionAPI):
+                            physicsUtils.add_physics_material_to_prim(stage, desc, physics_mat_sdf_path)
+                            bound_count += 1
+                            print(f"  Bound physics material to collision prim: {desc.GetPath()}")
+                    # Set collision approximation on the mesh prim: {name}/{name}/{name}
+                    mesh_path = f"{target_path}/{child_name}/{child_name}/{child_name}"
+                    mesh_prim = stage.GetPrimAtPath(mesh_path)
+                    if mesh_prim and mesh_prim.IsValid():
+                        is_base = self._is_base_object(child_name)
+                        if is_base:
+                            # SDF mesh for base objects (stable for static/heavy objects)
+                            UsdPhysics.CollisionAPI.Apply(mesh_prim)
+                            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+                            mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
+                            sdf_api = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
+                            sdf_api.CreateSdfResolutionAttr(300)
+                            print(f"  Set SDF mesh (resolution=300) on {mesh_path}")
+                        else:
+                            # Convex decomposition for other objects
+                            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+                            mesh_collision_api.GetApproximationAttr().Set("convexDecomposition")
+                            print(f"  Set convexDecomposition on {mesh_path}")
+                    else:
+                        print(f"  Warning: Mesh prim not found at {mesh_path}")
+
+                    if bound_count == 0:
+                        # No collision prims found, bind to the nested child directly
+                        nested_path = f"{target_path}/{child_name}/{child_name}"
+                        nested_prim = stage.GetPrimAtPath(nested_path)
+                        if nested_prim and nested_prim.IsValid():
+                            physicsUtils.add_physics_material_to_prim(stage, nested_prim, physics_mat_sdf_path)
+                            print(f"  Bound physics material to {nested_path} (no collision prims found)")
+                    else:
+                        print(f"Bound physics material to {bound_count} collision prim(s) under {child_name}")
         else:
             print(f"Failed to list folder: {folder_path}")
 
@@ -1627,13 +1757,18 @@ def cleanup(db):
                 {
                     keys.CREATE_NODES: [
                         ("on_playback_tick", "omni.graph.action.OnPlaybackTick"),
+                        ("ros2_context", "isaacsim.ros2.bridge.ROS2Context"),
+                        ("isaac_read_simulation_time", "isaacsim.core.nodes.IsaacReadSimulationTime"),
                         ("ros2_publish_transform_tree", "isaacsim.ros2.bridge.ROS2PublishTransformTree"),
                     ],
                     keys.CONNECT: [
                         ("on_playback_tick.outputs:tick", "ros2_publish_transform_tree.inputs:execIn"),
+                        ("ros2_context.outputs:context", "ros2_publish_transform_tree.inputs:context"),
+                        ("isaac_read_simulation_time.outputs:simulationTime", "ros2_publish_transform_tree.inputs:timeStamp"),
                     ],
                     keys.SET_VALUES: [
                         ("ros2_publish_transform_tree.inputs:topicName", topic_name),
+                        ("isaac_read_simulation_time.inputs:resetOnStop", True),
                     ],
                 },
             )
