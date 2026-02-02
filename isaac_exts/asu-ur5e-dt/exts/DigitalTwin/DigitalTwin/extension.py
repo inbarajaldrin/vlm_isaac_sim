@@ -7,6 +7,7 @@ import threading
 import glob
 import omni.client
 import omni.kit.commands
+import carb
 import math
 import re
 
@@ -32,10 +33,47 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_view = None
         
         # Add Objects UI state
-        self._objects_folder_path = "omniverse://localhost/Library/DT demo/aruco_fmb/"
+        self._objects_folder_path = "omniverse://localhost/Library/DT demo/fmb1/"
         self._object_spacing = 0.25  # Spacing between objects along X-axis in meters
         self._y_offset = -0.5  # Y offset for all objects
         self._z_offset = 0.0495  # Z offset for all objects
+        self._assembly_file_path = os.path.expanduser("~/Projects/aruco-grasp-annotator/data/fmb_assembly1.json")
+
+        # Physics scene settings
+        self._min_frame_rate = 60
+        self._time_steps_per_second = 120
+
+        # UR5e joint drive parameters
+        self._ur5e_max_force = 200.0
+        self._ur5e_stiffness = 100.0
+        self._ur5e_damping = 10.0
+
+        # RG2 gripper joint drive parameters
+        self._gripper_max_force = 1.2
+        self._gripper_stiffness = 0.1
+        self._gripper_damping = 0.05
+
+        # Gripper physics material
+        self._gripper_dynamic_friction = 0.5
+        self._gripper_static_friction = 0.5
+        self._gripper_restitution = 0.0
+        self._gripper_friction_combine_mode = "max"
+        self._gripper_restitution_combine_mode = "min"
+
+        # Object physics material
+        self._object_dynamic_friction = 0.1
+        self._object_static_friction = 0.1
+        self._object_restitution = 0.0
+        self._object_friction_combine_mode = "max"
+        self._object_restitution_combine_mode = "min"
+
+        # Object collision settings
+        self._base_collision_approximation = "sdf"  # "sdf" or "convexDecomposition"
+        self._object_collision_approximation = "sdf"  # "sdf" or "convexDecomposition"
+        self._sdf_resolution = 300
+        self._contact_offset = 0.0005
+        self._base_rest_offset = 0.0
+        self._object_rest_offset = -0.0005
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
@@ -55,8 +93,6 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Load Scene", width=100, height=35, clicked_fn=lambda: asyncio.ensure_future(self.load_scene()))
                         ui.Button("Refresh Graphs", width=120, height=35, clicked_fn=self.refresh_graphs)
 
-            with ui.CollapsableFrame(title="Randomize Object Poses", collapsed=False, height=0):
-                ui.Button("Randomize Object Poses", width=250, height=35, clicked_fn=self.randomize_object_poses)
 
             with ui.CollapsableFrame(title="UR5e Control", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
@@ -124,34 +160,60 @@ class DigitalTwin(omni.ext.IExt):
                         ui.Button("Create Camera", width=150, height=35, clicked_fn=self.create_additional_camera)
                         ui.Button("Create Action Graph", width=180, height=35, clicked_fn=self.create_additional_camera_actiongraph)
 
-            # Add Objects section
-            with ui.CollapsableFrame(title="Add Objects", collapsed=False, height=0):
+            with ui.CollapsableFrame(title="Objects", collapsed=False, height=0):
                 with ui.VStack(spacing=5, height=0):
-                    ui.Label("Import Objects from Folder", alignment=ui.Alignment.LEFT)
-                    
-                    # Folder path input
                     with ui.HStack(spacing=5):
-                        ui.Label("Objects Folder Path:", alignment=ui.Alignment.LEFT, width=150)
+                        ui.Label("Objects Folder:", alignment=ui.Alignment.LEFT, width=100)
                         self._objects_path_field = ui.StringField(width=300)
                         self._objects_path_field.model.set_value(self._objects_folder_path)
-                    
-                    # Add Objects button
+                    with ui.HStack(spacing=5):
+                        ui.Label("Assembly File:", alignment=ui.Alignment.LEFT, width=100)
+                        self._assembly_file_field = ui.StringField(width=300)
+                        self._assembly_file_field.model.set_value(self._assembly_file_path)
                     with ui.HStack(spacing=5):
                         ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
-                        ui.Button("Setup pose publisher action graph", width=250, height=35, clicked_fn=self.create_pose_publisher)
+                        ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
+                        ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
+                    with ui.HStack(spacing=5):
+                        ui.Button("Assemble", width=120, height=35, clicked_fn=self.assemble_objects)
+                        ui.Button("Disassemble", width=120, height=35, clicked_fn=self.disassemble_objects)
+                        ui.Button("Randomize Poses", width=150, height=35, clicked_fn=self.randomize_object_poses)
 
     async def load_scene(self):
-        world = World()
-        await world.initialize_simulation_context_async()
-        world.scene.add_default_ground_plane()
-
-        # Enable GPU dynamics on the physics scene
         stage = omni.usd.get_context().get_stage()
+
+        # Only initialize simulation context if physics scene doesn't exist yet
+        physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
+        if not physics_scene_prim or not physics_scene_prim.IsValid():
+            world = World()
+            await world.initialize_simulation_context_async()
+            print("Initialized simulation context and physics scene")
+        else:
+            world = World()
+            print("Physics scene already exists, skipping initialization")
+
+        # Check for ground plane on stage and add if missing
+        ground_prim = stage.GetPrimAtPath("/World/defaultGroundPlane")
+        if ground_prim and ground_prim.IsValid():
+            print("Ground plane already exists, skipping")
+        else:
+            from omni.isaac.core.objects import GroundPlane
+            GroundPlane(prim_path="/World/defaultGroundPlane", z_position=0, size=5000)
+            print("Added ground plane")
+
+        # Set minimum frame rate to 60
+        settings = carb.settings.get_settings()
+        settings.set("/persistent/simulation/minFrameRate", self._min_frame_rate)
+        print(f"Set persistent/simulation/minFrameRate to {self._min_frame_rate}")
+
+        # Configure physics scene
         physics_scene_prim = stage.GetPrimAtPath("/physicsScene")
         if physics_scene_prim and physics_scene_prim.IsValid():
             physx_scene_api = PhysxSchema.PhysxSceneAPI.Apply(physics_scene_prim)
             physx_scene_api.CreateEnableGPUDynamicsAttr().Set(True)
-            print("Enabled GPU dynamics on /physicsScene")
+            physx_scene_api.CreateTimeStepsPerSecondAttr().Set(self._time_steps_per_second)
+            physx_scene_api.CreateEnableCCDAttr().Set(True)
+            print(f"Enabled GPU dynamics, timeStepsPerSecond={self._time_steps_per_second}, CCD enabled on /physicsScene")
         else:
             print("Warning: /physicsScene not found")
 
@@ -320,7 +382,7 @@ class DigitalTwin(omni.ext.IExt):
         xform.ClearXformOpOrder()
 
         # Custom position and orientation
-        position = Gf.Vec3d(0.0, 0.0, 0.0)  # Replace with your desired position
+        position = Gf.Vec3d(0.0, 0.0, 0.11)  # Replace with your desired position
         rpy_deg = np.array([0.0, 0.0, 180.0])  # Replace with your desired RPY
         rpy_rad = np.deg2rad(rpy_deg)
         quat_xyzw = euler_angles_to_quats(rpy_rad)
@@ -355,10 +417,10 @@ class DigitalTwin(omni.ext.IExt):
                 print(f"Warning: Joint not found at {joint_path}")
                 continue
             drive_api = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
-            drive_api.GetMaxForceAttr().Set(200.0)
-            drive_api.GetStiffnessAttr().Set(100.0)
-            drive_api.GetDampingAttr().Set(1.0)
-            print(f"Set {joint_name}: maxForce=200, stiffness=100, damping=1")
+            drive_api.GetMaxForceAttr().Set(self._ur5e_max_force)
+            drive_api.GetStiffnessAttr().Set(self._ur5e_stiffness)
+            drive_api.GetDampingAttr().Set(self._ur5e_damping)
+            print(f"Set {joint_name}: maxForce={self._ur5e_max_force}, stiffness={self._ur5e_stiffness}, damping={self._ur5e_damping}")
 
         print("UR5e robot loaded successfully!")
 
@@ -867,6 +929,51 @@ def cleanup(db):
         add_reference_to_stage(rg2_usd_path, "/World/RG2_Gripper")
         print("RG2 Gripper imported at /World/RG2_Gripper")
 
+        # Configure gripper joint drives
+        stage = omni.usd.get_context().get_stage()
+        base_link = "/World/RG2_Gripper/onrobot_rg2_base_link"
+        gripper_joints = [
+            f"{base_link}/finger_joint",
+            f"{base_link}/right_outer_knuckle_joint",
+        ]
+        for joint_path in gripper_joints:
+            joint_prim = stage.GetPrimAtPath(joint_path)
+            if not joint_prim.IsValid():
+                print(f"Warning: Gripper joint not found at {joint_path}")
+                continue
+            drive_api = UsdPhysics.DriveAPI.Apply(joint_prim, "angular")
+            drive_api.GetMaxForceAttr().Set(self._gripper_max_force)
+            drive_api.GetStiffnessAttr().Set(self._gripper_stiffness)
+            drive_api.GetDampingAttr().Set(self._gripper_damping)
+            print(f"Set {joint_path}: maxForce=1, stiffness=0.1, damping=0.05")
+
+        # Configure gripper physics material
+        gripper_mat_path = "/World/RG2_Gripper/PhysicsMaterial"
+        gripper_material = UsdShade.Material.Define(stage, gripper_mat_path)
+        gripper_mat_api = UsdPhysics.MaterialAPI.Apply(gripper_material.GetPrim())
+        gripper_mat_api.CreateDynamicFrictionAttr().Set(self._gripper_dynamic_friction)
+        gripper_mat_api.CreateRestitutionAttr().Set(self._gripper_restitution)
+        gripper_mat_api.CreateStaticFrictionAttr().Set(self._gripper_static_friction)
+        gripper_physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(gripper_material.GetPrim())
+        gripper_physx_mat_api.CreateFrictionCombineModeAttr().Set(self._gripper_friction_combine_mode)
+        gripper_physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._gripper_restitution_combine_mode)
+        print(f"Created gripper physics material at {gripper_mat_path}")
+
+        # Bind physics material to finger body prims
+        gripper_mat_sdf_path = Sdf.Path(gripper_mat_path)
+        finger_prims = [
+            f"{base_link}/left_inner_finger",
+            f"{base_link}/right_inner_finger",
+        ]
+        for finger_path in finger_prims:
+            finger_prim = stage.GetPrimAtPath(finger_path)
+            if finger_prim and finger_prim.IsValid():
+                from omni.physx.scripts import physicsUtils
+                physicsUtils.add_physics_material_to_prim(stage, finger_prim, gripper_mat_sdf_path)
+                print(f"Bound gripper physics material to {finger_path}")
+            else:
+                print(f"Warning: Finger prim not found at {finger_path}")
+
     def attach_rg2_to_ur5e(self):
         import omni.usd
         from pxr import Usd, Sdf, UsdGeom, Gf
@@ -902,8 +1009,11 @@ def cleanup(db):
         if rg2_prim.IsValid():
             # === 1. Apply rotated position ===
             original_pos = translate_attr.Get()
+            # Get the UR5e root translate to account for its world position offset
+            ur5e_root = stage.GetPrimAtPath("/World/UR5e")
+            ur5e_translate = ur5e_root.GetAttribute("xformOp:translate").Get() if ur5e_root.IsValid() else Gf.Vec3d(0, 0, 0)
             x, y, z = original_pos[0], original_pos[1], original_pos[2]
-            rotated_pos = Gf.Vec3d(-x, -y, z)
+            rotated_pos = Gf.Vec3d(-x + ur5e_translate[0], -y + ur5e_translate[1], z + ur5e_translate[2])
 
             # === 2. Apply combined orientation ===
             fixed_quat = Gf.Quatd(0.70711, Gf.Vec3d(-0.70711, 0.0, 0.0))
@@ -1410,6 +1520,124 @@ def cleanup(db):
             prev=None,
         )
 
+    def assemble_objects(self, folder_path="/World/Objects"):
+        """Assemble objects based on JSON assembly data, positioned relative to the current base pose."""
+        import json
+
+        assembly_file = self._assembly_file_field.model.get_value_as_string()
+        if not os.path.exists(assembly_file):
+            print(f"Error: Assembly file not found: {assembly_file}")
+            return
+
+        print(f"Loading assembly data from {assembly_file}...")
+        with open(assembly_file, 'r') as f:
+            assembly_data = json.load(f)
+
+        stage = omni.usd.get_context().get_stage()
+
+        # Find the base object's current world position to use as assembly origin
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root.IsValid():
+            print(f"Warning: {folder_path} does not exist")
+            return
+
+        base_world_pos = Gf.Vec3d(0, 0, 0)
+        for child in objects_root.GetChildren():
+            obj_name = child.GetName()
+            if self._is_base_object(obj_name):
+                child_path = f"{folder_path}/{obj_name}/{obj_name}/{obj_name}"
+                child_prim = stage.GetPrimAtPath(child_path)
+                if child_prim and child_prim.IsValid():
+                    child_xform = UsdGeom.Xformable(child_prim)
+                    world_transform = child_xform.ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+                    base_world_pos = world_transform.ExtractTranslation()
+                    print(f"Base object '{obj_name}' at world pos: ({base_world_pos[0]:.4f}, {base_world_pos[1]:.4f}, {base_world_pos[2]:.4f})")
+                break
+
+        # Position each component from assembly data
+        for component in assembly_data['components']:
+            name = component['name']
+            position = component['position']
+            rotation = component['rotation']
+
+            prim_path = f"{folder_path}/{name}/{name}/{name}"
+            prim = stage.GetPrimAtPath(prim_path)
+            if not prim or not prim.IsValid():
+                print(f"Warning: Prim not found at {prim_path}, skipping {name}")
+                continue
+
+            # Assembly position offset relative to base
+            assembly_pos = Gf.Vec3d(
+                base_world_pos[0] + position['x'],
+                base_world_pos[1] + position['y'],
+                base_world_pos[2] + position['z']
+            )
+
+            # Use quaternion directly from assembly data (w, x, y, z for Gf.Quatf)
+            q = rotation['quaternion']
+            orient_quat = Gf.Quatf(float(q['w']), float(q['x']), float(q['y']), float(q['z']))
+
+            # Set orientation first, then translate into position
+            omni.kit.commands.execute('ChangeProperty',
+                prop_path=f"{prim_path}.xformOp:orient",
+                value=orient_quat,
+                prev=None)
+
+            omni.kit.commands.execute('ChangeProperty',
+                prop_path=f"{prim_path}.xformOp:translate",
+                value=assembly_pos,
+                prev=None)
+
+            print(f"Assembled {name} at ({assembly_pos[0]:.4f}, {assembly_pos[1]:.4f}, {assembly_pos[2]:.4f})")
+
+        print("Assembly complete!")
+
+    def disassemble_objects(self, folder_path="/World/Objects"):
+        """Lay out objects spaced apart along the X-axis (like initial add_objects positioning)."""
+        stage = omni.usd.get_context().get_stage()
+        objects_root = stage.GetPrimAtPath(folder_path)
+        if not objects_root.IsValid():
+            print(f"Warning: {folder_path} does not exist")
+            return
+
+        i = 0
+        for child in objects_root.GetChildren():
+            obj_name = child.GetName()
+            if obj_name == "PhysicsMaterial":
+                continue
+
+            child_path = f"{folder_path}/{obj_name}/{obj_name}/{obj_name}"
+            child_prim = stage.GetPrimAtPath(child_path)
+            if not child_prim or not child_prim.IsValid():
+                print(f"Warning: Prim not found at {child_path}, skipping {obj_name}")
+                continue
+
+            # Calculate spaced position: first at center, then alternating +X and -X
+            if i == 0:
+                x_position = 0.0
+            elif i % 2 == 1:
+                x_position = self._object_spacing * ((i + 1) // 2)
+            else:
+                x_position = -self._object_spacing * (i // 2)
+
+            pos = Gf.Vec3d(x_position, self._y_offset, self._z_offset)
+
+            omni.kit.commands.execute('ChangeProperty',
+                prop_path=f"{child_path}.xformOp:translate",
+                value=pos,
+                prev=None)
+
+            # Reset orientation to identity quaternion (same op type as randomize uses)
+            omni.kit.commands.execute('ChangeProperty',
+                prop_path=f"{child_path}.xformOp:orient",
+                value=Gf.Quatf(1, 0, 0, 0),
+                prev=None)
+
+            print(f"Disassembled {obj_name} to ({x_position:.3f}, {self._y_offset:.3f}, {self._z_offset:.3f})")
+            i += 1
+
+        print("Disassembly complete!")
+
     def randomize_object_poses(self, folder_path="/World/Objects"):
         """
         Randomize object poses in world frame, then transform to local child prim frame.
@@ -1514,6 +1742,29 @@ def cleanup(db):
             print(f"  Target world pos: ({target_world_pos[0]:.3f}, {target_world_pos[1]:.3f}, {target_world_pos[2]:.3f})")
             print(f"  Child local pos: ({local_pos[0]:.3f}, {local_pos[1]:.3f}, {local_pos[2]:.3f})")
 
+    def delete_objects(self, folder_path="/World/Objects"):
+        """Delete the Objects folder from the scene. Stops simulation first to avoid tensor view crash."""
+        timeline = omni.timeline.get_timeline_interface()
+        was_playing = timeline.is_playing()
+        if was_playing:
+            timeline.stop()
+            print("Stopped simulation before deleting objects")
+
+        stage = omni.usd.get_context().get_stage()
+        prim = stage.GetPrimAtPath(folder_path)
+        if prim and prim.IsValid():
+            stage.RemovePrim(folder_path)
+            print(f"Deleted {folder_path}")
+        else:
+            print(f"Warning: {folder_path} does not exist")
+
+        # Also delete the object poses action graph if present
+        pose_graph_path = "/World/Graphs/ActionGraph_objects_poses"
+        pose_graph_prim = stage.GetPrimAtPath(pose_graph_path)
+        if pose_graph_prim and pose_graph_prim.IsValid():
+            stage.RemovePrim(pose_graph_path)
+            print(f"Deleted {pose_graph_path}")
+
     def add_objects(self):
         """Import all objects from the specified folder into the scene"""
         # Get the folder path from the UI
@@ -1551,13 +1802,10 @@ def cleanup(db):
         selection = omni.usd.get_context().get_selection()
         selected_paths = selection.get_selected_prim_paths()
 
-        # Use current selection or fallback to /World/Objects
-        if selected_paths:
-            target_path = selected_paths[0]
-        else:
-            target_path = "/World/Objects"
-            if not stage.GetPrimAtPath(target_path):
-                UsdGeom.Xform.Define(stage, target_path)
+        # Always use /World/Objects as target path
+        target_path = "/World/Objects"
+        if not stage.GetPrimAtPath(target_path):
+            UsdGeom.Xform.Define(stage, target_path)
 
         # List all files in the folder
         result, entries = omni.client.list(folder_path)
@@ -1573,10 +1821,13 @@ def cleanup(db):
             physics_mat_path = f"{target_path}/PhysicsMaterial"
             material = UsdShade.Material.Define(stage, physics_mat_path)
             physics_mat_api = UsdPhysics.MaterialAPI.Apply(material.GetPrim())
-            physics_mat_api.CreateDynamicFrictionAttr().Set(0.5)
-            physics_mat_api.CreateRestitutionAttr().Set(0.1)
-            physics_mat_api.CreateStaticFrictionAttr().Set(0.5)
-            print(f"Created physics material at {physics_mat_path} (dynamicFriction=0.5, restitution=0.1, staticFriction=0.5)")
+            physics_mat_api.CreateDynamicFrictionAttr().Set(self._object_dynamic_friction)
+            physics_mat_api.CreateRestitutionAttr().Set(self._object_restitution)
+            physics_mat_api.CreateStaticFrictionAttr().Set(self._object_static_friction)
+            physx_mat_api = PhysxSchema.PhysxMaterialAPI.Apply(material.GetPrim())
+            physx_mat_api.CreateFrictionCombineModeAttr().Set(self._object_friction_combine_mode)
+            physx_mat_api.CreateRestitutionCombineModeAttr().Set(self._object_restitution_combine_mode)
+            print(f"Created physics material at {physics_mat_path}")
 
             # Import each USD file with positioning
             for i, usd_file in enumerate(usd_files):
@@ -1663,20 +1914,25 @@ def cleanup(db):
                     mesh_path = f"{target_path}/{child_name}/{child_name}/{child_name}"
                     mesh_prim = stage.GetPrimAtPath(mesh_path)
                     if mesh_prim and mesh_prim.IsValid():
+                        # Determine collision approximation based on object type
                         is_base = self._is_base_object(child_name)
-                        if is_base:
-                            # SDF mesh for base objects (stable for static/heavy objects)
-                            UsdPhysics.CollisionAPI.Apply(mesh_prim)
-                            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+                        approx = self._base_collision_approximation if is_base else self._object_collision_approximation
+                        UsdPhysics.CollisionAPI.Apply(mesh_prim)
+                        mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
+                        if approx == "sdf":
                             mesh_collision_api.CreateApproximationAttr(PhysxSchema.Tokens.sdf)
                             sdf_api = PhysxSchema.PhysxSDFMeshCollisionAPI.Apply(mesh_prim)
-                            sdf_api.CreateSdfResolutionAttr(300)
-                            print(f"  Set SDF mesh (resolution=300) on {mesh_path}")
+                            sdf_api.CreateSdfResolutionAttr(self._sdf_resolution)
+                            print(f"  Set SDF mesh (resolution={self._sdf_resolution}) on {mesh_path}")
                         else:
-                            # Convex decomposition for other objects
-                            mesh_collision_api = UsdPhysics.MeshCollisionAPI.Apply(mesh_prim)
-                            mesh_collision_api.GetApproximationAttr().Set("convexDecomposition")
-                            print(f"  Set convexDecomposition on {mesh_path}")
+                            mesh_collision_api.CreateApproximationAttr(approx)
+                            print(f"  Set {approx} collision on {mesh_path}")
+                        # Set contact/rest offset for 0.01 scale objects
+                        rest_offset = self._base_rest_offset if is_base else self._object_rest_offset
+                        physx_collision_api = PhysxSchema.PhysxCollisionAPI.Apply(mesh_prim)
+                        physx_collision_api.CreateContactOffsetAttr().Set(self._contact_offset)
+                        physx_collision_api.CreateRestOffsetAttr().Set(rest_offset)
+                        print(f"  Set contactOffset={self._contact_offset}, restOffset={rest_offset} on {mesh_path}")
                     else:
                         print(f"  Warning: Mesh prim not found at {mesh_path}")
 
