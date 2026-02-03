@@ -74,6 +74,7 @@ class DigitalTwin(omni.ext.IExt):
         self._contact_offset = 0.0005
         self._base_rest_offset = 0.0
         self._object_rest_offset = -0.0005
+        self._object_angular_damping = 50.0  # High damping to prevent mid-air rotation
 
         # Isaac Sim handles ROS2 initialization automatically through its bridge
         print("ROS2 bridge will be initialized by Isaac Sim when needed")
@@ -1917,6 +1918,10 @@ def cleanup(db):
                         physx_collision_api.CreateContactOffsetAttr().Set(self._contact_offset)
                         physx_collision_api.CreateRestOffsetAttr().Set(rest_offset)
                         print(f"  Set contactOffset={self._contact_offset}, restOffset={rest_offset} on {mesh_path}")
+                        # Apply angular damping to prevent mid-air rotation
+                        physx_rb_api = PhysxSchema.PhysxRigidBodyAPI.Apply(mesh_prim)
+                        physx_rb_api.CreateAngularDampingAttr().Set(self._object_angular_damping)
+                        print(f"  Set angularDamping={self._object_angular_damping} on {mesh_path}")
                     else:
                         print(f"  Warning: Mesh prim not found at {mesh_path}")
 
