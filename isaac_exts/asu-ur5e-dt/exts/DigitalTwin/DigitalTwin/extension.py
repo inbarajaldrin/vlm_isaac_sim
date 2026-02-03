@@ -803,27 +803,27 @@ def cleanup(db):
         print("ros2 topic echo /gripper_width_sim")
 
     def setup_force_publish_action_graph(self):
-        """Setup force publishing using joint efforts from ArticulationView.
+        """Setup force publishing using joint forces from ArticulationView.
 
-        Uses a physics step callback to read measured joint efforts at physics rate
-        (~60 Hz). Publishes shoulder_lift effort to /gripper_force topic for
-        early collision detection.
+        Uses a physics step callback to read measured joint forces at physics rate
+        (~60 Hz). Uses get_measured_joint_forces() which returns 6-DOF spatial forces
+        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes Fz from the gripper joint.
         """
         import omni.physx
 
-        print("Setting up Joint Effort Force Publisher...")
+        print("Setting up Joint Force Publisher...")
 
         # Clean up any previous physics callback
         self._stop_force_publish()
 
-        # Initialize ArticulationView for reading joint efforts
+        # Initialize ArticulationView for reading joint forces
         try:
             self._effort_articulation = ArticulationView(
                 prim_paths_expr="/World/UR5e",
-                name="ur5e_effort_view"
+                name="ur5e_force_view"
             )
             self._effort_articulation.initialize()
-            print("ArticulationView initialized for joint effort reading")
+            print(f"ArticulationView initialized. Joints: {self._effort_articulation.joint_names}")
         except Exception as e:
             print(f"Failed to initialize ArticulationView: {e}")
             print("Make sure simulation is playing and UR5e is loaded")
@@ -848,7 +848,7 @@ def cleanup(db):
                 keys.SET_VALUES: [
                     (f"{graph_path}/publisher.inputs:messageName", "Float64"),
                     (f"{graph_path}/publisher.inputs:messagePackage", "std_msgs"),
-                    (f"{graph_path}/publisher.inputs:topicName", "joint_effort"),
+                    (f"{graph_path}/publisher.inputs:topicName", "joint_force"),
                 ],
                 keys.CONNECT: [
                     (f"{graph_path}/tick.outputs:tick", f"{graph_path}/publisher.inputs:execIn"),
@@ -863,35 +863,38 @@ def cleanup(db):
 
         self._force_graph_attr_path = f"{graph_path}/publisher.inputs:data"
 
-        # Physics callback reads joint efforts at physics rate and updates the attribute
+        # Physics callback reads joint forces at physics rate and updates the attribute
         self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
             self._on_physics_step_force
         )
 
         self._force_publish_active = True
 
-        print(f"Joint Effort Publisher created at {graph_path}")
-        print("Publishing shoulder_lift effort (Nm) to topic: /joint_effort")
-        print("Joint efforts read at physics rate (~60 Hz)")
-        print("Use threshold ~2-10 Nm change for early collision detection")
+        print(f"Joint Force Publisher created at {graph_path}")
+        print("Publishing Fz (N) from gripper joint to topic: /joint_force")
+        print("Using get_measured_joint_forces() - 6-DOF spatial forces per joint")
+        print("Joint forces read at physics rate (~60 Hz)")
 
     def _on_physics_step_force(self, dt):
-        """Physics step callback - read joint efforts and update OmniGraph attribute.
+        """Physics step callback - read joint forces and update OmniGraph attribute.
 
-        Publishes shoulder_lift (index 1) effort as it has the best sensitivity
-        for collision detection due to its long lever arm.
+        Uses get_measured_joint_forces() which returns 6-DOF spatial forces
+        [Fx, Fy, Fz, Tx, Ty, Tz] per joint. Publishes Fz from the last joint
+        (gripper joint) as the main collision/contact indicator.
         """
         try:
             if self._effort_articulation is None:
                 return
 
-            efforts = self._effort_articulation.get_measured_joint_efforts()
-            if efforts is not None and len(efforts) > 0:
-                # Index 1 = shoulder_lift - best collision indicator
-                shoulder_lift_effort = float(efforts[0][1])
+            # get_measured_joint_forces returns shape (num_articulations, num_joints, 6)
+            # where 6 = [Fx, Fy, Fz, Tx, Ty, Tz]
+            forces = self._effort_articulation.get_measured_joint_forces()
+            if forces is not None and len(forces) > 0:
+                # Use last joint (gripper joint), get Fz (index 2) as collision indicator
+                fz = float(forces[0][-1][2])
                 og.Controller.set(
                     og.Controller.attribute(self._force_graph_attr_path),
-                    shoulder_lift_effort
+                    fz
                 )
         except Exception:
             pass
