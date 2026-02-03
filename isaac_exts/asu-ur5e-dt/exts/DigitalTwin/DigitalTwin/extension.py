@@ -247,7 +247,7 @@ class DigitalTwin(omni.ext.IExt):
             graph_paths_to_recreate.append("RG2")
         
         force_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_RG2_ForcePublish")
-        if force_graph.IsValid():
+        if force_graph.IsValid() or getattr(self, '_force_publish_active', False):
             graph_paths_to_recreate.append("RG2_ForcePublish")
         
         camera_graph = stage.GetPrimAtPath(f"{graphs_path}/ActionGraph_Camera")
@@ -803,125 +803,94 @@ def cleanup(db):
         print("ros2 topic echo /gripper_width_sim")
 
     def setup_force_publish_action_graph(self):
-        """Setup force publish action graph for ROS2 publishing gripper forces"""
+        """Setup force publishing for gripper contact Z-force.
+
+        Uses a physics step callback to read the contact sensor at physics rate
+        (~60 Hz) and writes to an OmniGraph attribute. The OmniGraph ROS2Publisher
+        handles the actual ROS2 publishing.
+        """
+        import omni.usd
+        import omni.physx
+        try:
+            from omni.isaac.sensor import _sensor
+        except ImportError:
+            from isaacsim.sensors.physics import _sensor
+
         print("Setting up Force Publish Action Graph...")
-        
-        # Create the action graph
-        graph_path = "/World/Graphs/ActionGraph_RG2_ForcePublish"
-        keys = og.Controller.Keys
+
+        # Clean up any previous physics callback
+        self._stop_force_publish()
 
         # Delete existing graph if it exists
+        graph_path = "/World/Graphs/ActionGraph_RG2_ForcePublish"
+        keys = og.Controller.Keys
         stage = omni.usd.get_context().get_stage()
         if stage.GetPrimAtPath(graph_path):
             stage.RemovePrim(graph_path)
 
-        # Create nodes with initial values
+        # Create OmniGraph with OnPlaybackTick for ROS2 publisher execution
         (graph, nodes, _, _) = og.Controller.edit(
             {"graph_path": graph_path, "evaluator_name": "execution"},
             {
                 keys.CREATE_NODES: [
                     (f"{graph_path}/tick", "omni.graph.action.OnPlaybackTick"),
                     (f"{graph_path}/context", "isaacsim.ros2.bridge.ROS2Context"),
-                    (f"{graph_path}/script", "omni.graph.scriptnode.ScriptNode"),
                     (f"{graph_path}/publisher", "isaacsim.ros2.bridge.ROS2Publisher")
                 ],
                 keys.SET_VALUES: [
-                    (f"{graph_path}/script.inputs:usePath", False),
                     (f"{graph_path}/publisher.inputs:messageName", "Float64"),
                     (f"{graph_path}/publisher.inputs:messagePackage", "std_msgs"),
                     (f"{graph_path}/publisher.inputs:topicName", "gripper_force"),
                 ],
                 keys.CONNECT: [
-                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/script.inputs:execIn"),
-                    (f"{graph_path}/script.outputs:execOut", f"{graph_path}/publisher.inputs:execIn"),
+                    (f"{graph_path}/tick.outputs:tick", f"{graph_path}/publisher.inputs:execIn"),
                     (f"{graph_path}/context.outputs:context", f"{graph_path}/publisher.inputs:context"),
                 ]
             }
         )
 
-        # Script content
-        script_content = '''from omni.isaac.core.articulations import ArticulationView
-import numpy as np
-import omni.timeline
-
-_gripper_view = None
-
-def setup(db):
-    global _gripper_view
-    try:
-        _gripper_view = ArticulationView(prim_paths_expr="/World/RG2_Gripper", name="gripper_force")
-        _gripper_view.initialize()
-        db.log_info("[FORCE] Force publisher initialized")
-        print("[FORCE] Publisher ready")
-    except Exception as e:
-        db.log_error(f"[FORCE] Setup failed: {e}")
-        print(f"[FORCE ERROR] {e}")
-
-def compute(db):
-    global _gripper_view
-    
-    try:
-        if _gripper_view is None:
-            db.outputs.max_force = 0.0
-            return
-        
-        timeline = omni.timeline.get_timeline_interface()
-        if timeline.is_stopped():
-            db.outputs.max_force = 0.0
-            return
-        
-        try:
-            forces = _gripper_view.get_measured_joint_forces()
-            
-            if forces is not None:
-                forces_flat = np.asarray(forces).flatten()
-                if len(forces_flat) > 0:
-                    max_force = float(np.max(np.abs(forces_flat)))
-                    db.outputs.max_force = max_force
-                else:
-                    db.outputs.max_force = 0.0
-            else:
-                db.outputs.max_force = 0.0
-        
-        except Exception as e:
-            db.outputs.max_force = 0.0
-    
-    except Exception as e:
-        db.outputs.max_force = 0.0
-
-def cleanup(db):
-    global _gripper_view
-    try:
-        _gripper_view = None
-    except:
-        pass'''
-
-        # Set script FIRST
-        og.Controller.set(og.Controller.attribute(f"{graph_path}/script.inputs:script"), script_content)
-
-        # Now create output attribute on script node using OmniGraph API
-        script_node = og.Controller.node(f"{graph_path}/script")
-        og.Controller.create_attribute(
-            script_node, 
-            "max_force", 
-            og.Type(og.BaseDataType.DOUBLE),
-            attr_port=og.AttributePortType.ATTRIBUTE_PORT_TYPE_OUTPUT
-        )
-
-        print("Created outputs:max_force attribute on script node")
-
-        # Create input attribute on publisher and connect it using OmniGraph API
+        # Create data attribute on publisher for the Z-force value
         publisher_prim = stage.GetPrimAtPath(f"{graph_path}/publisher")
-        data_attr = publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
+        publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
 
-        # Connect script output to publisher input using OmniGraph API
-        og.Controller.connect(
-            f"{graph_path}/script.outputs:max_force",
-            f"{graph_path}/publisher.inputs:data"
+        # Store references for physics callback
+        self._force_cs = _sensor.acquire_contact_sensor_interface()
+        self._force_sensor_path = "/World/RG2_Gripper/left_inner_finger/Contact_Sensor"
+        self._force_graph_attr_path = f"{graph_path}/publisher.inputs:data"
+
+        # Physics callback reads contact sensor at physics rate and updates the attribute
+        self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
+            self._on_physics_step_force
         )
+
+        self._force_publish_active = True
 
         print(f"RG2 Force Publish action graph created at {graph_path}")
-        print("Publishing to topic: /gripper_force")
+        print("Publishing contact Z-force to topic: /gripper_force")
+        print("Contact sensor read at physics rate (~60 Hz)")
+
+    def _on_physics_step_force(self, dt):
+        """Physics step callback - read contact sensor and update OmniGraph attribute."""
+        try:
+            raw = self._force_cs.get_contact_sensor_raw_data(self._force_sensor_path)
+
+            z_force = 0.0
+            if raw is not None and raw.shape[0] > 0:
+                for i in range(raw.shape[0]):
+                    contact_dt = raw[i]["dt"]
+                    if contact_dt > 0:
+                        z_force += raw[i]["impulse"][2] / contact_dt
+
+            og.Controller.set(og.Controller.attribute(self._force_graph_attr_path), z_force)
+        except Exception:
+            pass
+
+    def _stop_force_publish(self):
+        """Stop the physics-rate force publisher and clean up resources."""
+        if hasattr(self, '_force_physx_sub') and self._force_physx_sub is not None:
+            self._force_physx_sub = None
+        self._force_cs = None
+        self._force_publish_active = False
 
     def import_rg2_gripper(self):
         from omni.isaac.core.utils.stage import add_reference_to_stage
@@ -2085,7 +2054,10 @@ def cleanup(db):
     def on_shutdown(self):
         """Clean shutdown"""
         print("[DigitalTwin] Digital Twin shutdown")
-        
+
+        # Stop physics-rate force publisher
+        self._stop_force_publish()
+
         # Isaac Sim handles ROS2 shutdown automatically
         print("ROS2 bridge shutdown handled by Isaac Sim")
         
