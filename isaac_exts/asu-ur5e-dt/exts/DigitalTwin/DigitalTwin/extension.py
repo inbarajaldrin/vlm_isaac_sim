@@ -803,23 +803,31 @@ def cleanup(db):
         print("ros2 topic echo /gripper_width_sim")
 
     def setup_force_publish_action_graph(self):
-        """Setup force publishing for gripper contact Z-force.
+        """Setup force publishing using joint efforts from ArticulationView.
 
-        Uses a physics step callback to read the contact sensor at physics rate
-        (~60 Hz) and writes to an OmniGraph attribute. The OmniGraph ROS2Publisher
-        handles the actual ROS2 publishing.
+        Uses a physics step callback to read measured joint efforts at physics rate
+        (~60 Hz). Publishes shoulder_lift effort to /gripper_force topic for
+        early collision detection.
         """
-        import omni.usd
         import omni.physx
-        try:
-            from omni.isaac.sensor import _sensor
-        except ImportError:
-            from isaacsim.sensors.physics import _sensor
 
-        print("Setting up Force Publish Action Graph...")
+        print("Setting up Joint Effort Force Publisher...")
 
         # Clean up any previous physics callback
         self._stop_force_publish()
+
+        # Initialize ArticulationView for reading joint efforts
+        try:
+            self._effort_articulation = ArticulationView(
+                prim_paths_expr="/World/UR5e",
+                name="ur5e_effort_view"
+            )
+            self._effort_articulation.initialize()
+            print("ArticulationView initialized for joint effort reading")
+        except Exception as e:
+            print(f"Failed to initialize ArticulationView: {e}")
+            print("Make sure simulation is playing and UR5e is loaded")
+            return
 
         # Delete existing graph if it exists
         graph_path = "/World/Graphs/ActionGraph_RG2_ForcePublish"
@@ -840,7 +848,7 @@ def cleanup(db):
                 keys.SET_VALUES: [
                     (f"{graph_path}/publisher.inputs:messageName", "Float64"),
                     (f"{graph_path}/publisher.inputs:messagePackage", "std_msgs"),
-                    (f"{graph_path}/publisher.inputs:topicName", "gripper_force"),
+                    (f"{graph_path}/publisher.inputs:topicName", "joint_effort"),
                 ],
                 keys.CONNECT: [
                     (f"{graph_path}/tick.outputs:tick", f"{graph_path}/publisher.inputs:execIn"),
@@ -849,39 +857,42 @@ def cleanup(db):
             }
         )
 
-        # Create data attribute on publisher for the Z-force value
+        # Create data attribute on publisher for the effort value
         publisher_prim = stage.GetPrimAtPath(f"{graph_path}/publisher")
         publisher_prim.CreateAttribute("inputs:data", Sdf.ValueTypeNames.Double, custom=True)
 
-        # Store references for physics callback
-        self._force_cs = _sensor.acquire_contact_sensor_interface()
-        self._force_sensor_path = "/World/RG2_Gripper/left_inner_finger/Contact_Sensor"
         self._force_graph_attr_path = f"{graph_path}/publisher.inputs:data"
 
-        # Physics callback reads contact sensor at physics rate and updates the attribute
+        # Physics callback reads joint efforts at physics rate and updates the attribute
         self._force_physx_sub = omni.physx.get_physx_interface().subscribe_physics_step_events(
             self._on_physics_step_force
         )
 
         self._force_publish_active = True
 
-        print(f"RG2 Force Publish action graph created at {graph_path}")
-        print("Publishing contact Z-force to topic: /gripper_force")
-        print("Contact sensor read at physics rate (~60 Hz)")
+        print(f"Joint Effort Publisher created at {graph_path}")
+        print("Publishing shoulder_lift effort (Nm) to topic: /joint_effort")
+        print("Joint efforts read at physics rate (~60 Hz)")
+        print("Use threshold ~2-10 Nm change for early collision detection")
 
     def _on_physics_step_force(self, dt):
-        """Physics step callback - read contact sensor and update OmniGraph attribute."""
+        """Physics step callback - read joint efforts and update OmniGraph attribute.
+
+        Publishes shoulder_lift (index 1) effort as it has the best sensitivity
+        for collision detection due to its long lever arm.
+        """
         try:
-            raw = self._force_cs.get_contact_sensor_raw_data(self._force_sensor_path)
+            if self._effort_articulation is None:
+                return
 
-            z_force = 0.0
-            if raw is not None and raw.shape[0] > 0:
-                for i in range(raw.shape[0]):
-                    contact_dt = raw[i]["dt"]
-                    if contact_dt > 0:
-                        z_force += raw[i]["impulse"][2] / contact_dt
-
-            og.Controller.set(og.Controller.attribute(self._force_graph_attr_path), z_force)
+            efforts = self._effort_articulation.get_measured_joint_efforts()
+            if efforts is not None and len(efforts) > 0:
+                # Index 1 = shoulder_lift - best collision indicator
+                shoulder_lift_effort = float(efforts[0][1])
+                og.Controller.set(
+                    og.Controller.attribute(self._force_graph_attr_path),
+                    shoulder_lift_effort
+                )
         except Exception:
             pass
 
@@ -889,7 +900,8 @@ def cleanup(db):
         """Stop the physics-rate force publisher and clean up resources."""
         if hasattr(self, '_force_physx_sub') and self._force_physx_sub is not None:
             self._force_physx_sub = None
-        self._force_cs = None
+        if hasattr(self, '_effort_articulation'):
+            self._effort_articulation = None
         self._force_publish_active = False
 
     def import_rg2_gripper(self):
