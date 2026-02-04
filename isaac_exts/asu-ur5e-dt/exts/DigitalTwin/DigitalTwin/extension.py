@@ -54,7 +54,7 @@ class DigitalTwin(omni.ext.IExt):
         self._gripper_damping = 0.05
 
         # Gripper physics material
-        self._gripper_dynamic_friction = 0.5
+        self._gripper_dynamic_friction = 0.6
         self._gripper_static_friction = 0.5
         self._gripper_restitution = 0.0
         self._gripper_friction_combine_mode = "max"
@@ -169,12 +169,12 @@ class DigitalTwin(omni.ext.IExt):
                         self._objects_path_field.model.set_value(self._objects_folder_path)
                     with ui.HStack(spacing=5):
                         ui.Label("Assembly File:", alignment=ui.Alignment.LEFT, width=100)
-                        self._assembly_file_field = ui.StringField(width=300)
+                        self._assembly_file_field = ui.StringField(width=450)
                         self._assembly_file_field.model.set_value(self._assembly_file_path)
                     with ui.HStack(spacing=5):
                         ui.Button("Add Objects", width=150, height=35, clicked_fn=self.add_objects)
-                        ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
                         ui.Button("Setup Pose Publisher", width=180, height=35, clicked_fn=self.create_pose_publisher)
+                        ui.Button("Delete Objects", width=150, height=35, clicked_fn=self.delete_objects)
                     with ui.HStack(spacing=5):
                         ui.Button("Assemble", width=120, height=35, clicked_fn=self.assemble_objects)
                         ui.Button("Disassemble", width=120, height=35, clicked_fn=self.disassemble_objects)
@@ -213,8 +213,8 @@ class DigitalTwin(omni.ext.IExt):
             physx_scene_api = PhysxSchema.PhysxSceneAPI.Apply(physics_scene_prim)
             physx_scene_api.CreateEnableGPUDynamicsAttr().Set(True)
             physx_scene_api.CreateTimeStepsPerSecondAttr().Set(self._time_steps_per_second)
-            physx_scene_api.CreateEnableCCDAttr().Set(True)
-            print(f"Enabled GPU dynamics, timeStepsPerSecond={self._time_steps_per_second}, CCD enabled on /physicsScene")
+            physx_scene_api.CreateEnableCCDAttr().Set(False)
+            print(f"Enabled GPU dynamics, timeStepsPerSecond={self._time_steps_per_second}, CCD disabled on /physicsScene")
         else:
             print("Warning: /physicsScene not found")
 
@@ -439,6 +439,13 @@ class DigitalTwin(omni.ext.IExt):
         enable_extension("omni.graph.action")
 
         graph_path = "/World/Graphs/ActionGraph_UR5e"
+
+        # Check if graph already exists
+        stage = omni.usd.get_context().get_stage()
+        if stage.GetPrimAtPath(graph_path):
+            print(f"Action Graph already exists at {graph_path}, skipping creation.")
+            return
+
         (graph, nodes, _, _) = og.Controller.edit(
             {
                 "graph_path": graph_path,
